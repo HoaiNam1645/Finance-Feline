@@ -59,11 +59,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       id: { not: id },
       accountNumber: {
         equals: accountNumber,
-        mode: "insensitive",
       },
       bankName: {
         equals: bankName,
-        mode: "insensitive",
       },
     },
     select: { id: true },

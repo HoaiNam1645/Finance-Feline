@@ -149,8 +149,8 @@ export async function GET(request: Request) {
     ...(qParam
       ? {
           OR: [
-            { description: { contains: qParam, mode: "insensitive" } },
-            { category: { name: { contains: qParam, mode: "insensitive" } } },
+            { description: { contains: qParam } },
+            { category: { name: { contains: qParam } } },
           ],
         }
       : {}),

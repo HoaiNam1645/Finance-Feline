@@ -109,7 +109,6 @@ export async function POST(request: Request) {
     where: {
       name: {
         equals: normalizedName,
-        mode: "insensitive",
       },
     },
     select: { id: true },

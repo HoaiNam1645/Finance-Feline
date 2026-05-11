@@ -56,11 +56,9 @@ export async function POST(request: Request) {
     where: {
       accountNumber: {
         equals: accountNumber,
-        mode: "insensitive",
       },
       bankName: {
         equals: bankName,
-        mode: "insensitive",
       },
     },
     select: { id: true },

@@ -1,11 +1,9 @@
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
-import { PrismaPg } from "@prisma/adapter-pg";
-import { Pool } from "pg";
+import { PrismaMariaDb } from "@prisma/adapter-mariadb";
 import { env } from "../lib/env";
 
-const pool = new Pool({ connectionString: env.databaseUrl });
-const adapter = new PrismaPg(pool);
+const adapter = new PrismaMariaDb(env.databaseUrl);
 const prisma = new PrismaClient({ adapter, log: ["error"] });
 
 type CandidateRow = {
@@ -109,5 +107,4 @@ main()
   })
   .finally(async () => {
     await prisma.$disconnect();
-    await pool.end();
   });

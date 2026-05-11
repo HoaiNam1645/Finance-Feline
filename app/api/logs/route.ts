@@ -58,11 +58,11 @@ export async function GET(request: Request) {
         : undefined,
     OR: q
       ? [
-          { action: { contains: q, mode: "insensitive" as const } },
-          { entityType: { contains: q, mode: "insensitive" as const } },
-          { entityId: { contains: q, mode: "insensitive" as const } },
-          { actorRoleSnapshot: { contains: q, mode: "insensitive" as const } },
-          { actor: { fullName: { contains: q, mode: "insensitive" as const } } },
+          { action: { contains: q } },
+          { entityType: { contains: q } },
+          { entityId: { contains: q } },
+          { actorRoleSnapshot: { contains: q } },
+          { actor: { fullName: { contains: q } } },
         ]
       : undefined,
   };

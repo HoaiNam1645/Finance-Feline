@@ -73,7 +73,6 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
         id: { not: id },
         name: {
           equals: nextName,
-          mode: "insensitive",
         },
       },
       select: { id: true },
