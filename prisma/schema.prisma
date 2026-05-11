@@ -1,0 +1,325 @@
+generator client {
+  provider = "prisma-client-js"
+  engineType = "binary"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+}
+
+enum TransactionDirection {
+  IN
+  OUT
+}
+
+enum PurchaseRequestStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  PAID
+  CANCELLED
+}
+
+enum PurchaseApprovalAction {
+  APPROVE
+  REJECT
+}
+
+enum TransactionAdjustmentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model User {
+  id               String                @id @default(cuid())
+  email            String                @unique
+  passwordHash     String                @map("password_hash")
+  fullName         String                @map("full_name")
+  status           UserStatus            @default(ACTIVE)
+  createdAt        DateTime              @default(now()) @map("created_at")
+  updatedAt        DateTime              @updatedAt @map("updated_at")
+  roles            UserRole[]
+  purchaseRequests PurchaseRequest[]
+  approvals        PurchaseRequestApproval[]
+  transactionsMade Transaction[]         @relation("TransactionCreatedBy")
+  transactionsOk   Transaction[]         @relation("TransactionApprovedBy")
+  transactionsAsTeam Transaction[]       @relation("TransactionTeamUser")
+  receiptImages    ReceiptImage[]        @relation("ReceiptUploadedBy")
+  auditLogs        AuditLog[]
+  requestedTransactionAdjustments TransactionAdjustment[] @relation("TransactionAdjustmentRequestedBy")
+  approvedTransactionAdjustments  TransactionAdjustment[] @relation("TransactionAdjustmentApprovedBy")
+
+  @@map("users")
+}
+
+model Role {
+  id          String           @id @default(cuid())
+  code        String           @unique
+  name        String
+  users       UserRole[]
+  permissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id    String           @id @default(cuid())
+  code  String           @unique
+  name  String
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+model UserRole {
+  userId String @map("user_id")
+  roleId String @map("role_id")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+model RolePermission {
+  roleId       String     @map("role_id")
+  permissionId String     @map("permission_id")
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model TransactionCategory {
+  id                            String            @id @default(cuid())
+  code                          String            @unique
+  name                          String
+  type                          TransactionType
+  parentId                      String?           @map("parent_id")
+  accountantApprovalThresholdVnd Int?              @map("accountant_approval_threshold_vnd")
+  isActive                      Boolean           @default(true) @map("is_active")
+  createdAt                     DateTime          @default(now()) @map("created_at")
+  updatedAt                     DateTime          @updatedAt @map("updated_at")
+  parent                        TransactionCategory? @relation("CategoryChildren", fields: [parentId], references: [id], onDelete: SetNull)
+  children                      TransactionCategory[] @relation("CategoryChildren")
+  transactions                  Transaction[]
+  requests                      PurchaseRequest[]
+
+  @@index([parentId])
+  @@map("transaction_categories")
+}
+
+model Currency {
+  code        String         @id
+  name        String
+  precision   Int            @default(2)
+  ratesFrom   ExchangeRate[] @relation("RatesFrom")
+  ratesTo     ExchangeRate[] @relation("RatesTo")
+  transactions Transaction[]
+  requests    PurchaseRequest[]
+
+  @@map("currencies")
+}
+
+model PaymentAccount {
+  id            String        @id @default(cuid())
+  accountName   String        @map("account_name")
+  bankName      String        @map("bank_name")
+  accountNumber String        @map("account_number")
+  ownerName     String        @map("owner_name")
+  isActive      Boolean       @default(true) @map("is_active")
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+  transactions  Transaction[]
+
+  @@index([isActive, accountName])
+  @@map("payment_accounts")
+}
+
+model ExchangeRate {
+  id           String   @id @default(cuid())
+  fromCurrency String   @map("from_currency")
+  toCurrency   String   @map("to_currency")
+  rate         Decimal  @db.Decimal(20, 4)
+  source       String
+  effectiveFrom DateTime @map("effective_from")
+  createdAt    DateTime @default(now()) @map("created_at")
+  from         Currency @relation("RatesFrom", fields: [fromCurrency], references: [code])
+  to           Currency @relation("RatesTo", fields: [toCurrency], references: [code])
+
+  @@index([fromCurrency, toCurrency, effectiveFrom])
+  @@map("exchange_rates")
+}
+
+model PurchaseRequest {
+  id             String                  @id @default(cuid())
+  requesterId    String                  @map("requester_id")
+  categoryId     String?                 @map("category_id")
+  title          String
+  description    String
+  expectedAmount Decimal                 @db.Decimal(20, 4) @map("expected_amount")
+  currencyCode   String                  @map("currency_code")
+  status         PurchaseRequestStatus   @default(DRAFT)
+  createdAt      DateTime                @default(now()) @map("created_at")
+  updatedAt      DateTime                @updatedAt @map("updated_at")
+  requester      User                    @relation(fields: [requesterId], references: [id])
+  category       TransactionCategory?    @relation(fields: [categoryId], references: [id])
+  currency       Currency                @relation(fields: [currencyCode], references: [code])
+  items          PurchaseRequestItem[]
+  approvals      PurchaseRequestApproval[]
+  transactions   Transaction[]
+  receiptImages  ReceiptImage[]
+
+  @@index([requesterId, status])
+  @@index([categoryId])
+  @@map("purchase_requests")
+}
+
+model PurchaseRequestItem {
+  id           String          @id @default(cuid())
+  requestId    String          @map("request_id")
+  itemName     String          @map("item_name")
+  qty          Decimal         @db.Decimal(20, 4)
+  unitPrice    Decimal         @db.Decimal(20, 4) @map("unit_price")
+  currencyCode String          @map("currency_code")
+  subtotal     Decimal         @db.Decimal(20, 4)
+  request      PurchaseRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@map("purchase_request_items")
+}
+
+model PurchaseRequestApproval {
+  id        String                 @id @default(cuid())
+  requestId String                 @map("request_id")
+  action    PurchaseApprovalAction
+  actorId   String                 @map("actor_id")
+  note      String
+  actedAt   DateTime               @default(now()) @map("acted_at")
+  request   PurchaseRequest        @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  actor     User                   @relation(fields: [actorId], references: [id])
+
+  @@index([requestId, actedAt])
+  @@map("purchase_request_approvals")
+}
+
+model Transaction {
+  id                 String               @id @default(cuid())
+  direction          TransactionDirection
+  teamUserId         String?              @map("team_user_id")
+  categoryId         String               @map("category_id")
+  amountOriginal     Decimal              @db.Decimal(20, 4) @map("amount_original")
+  currencyCode       String               @map("currency_code")
+  exchangeRateToVnd  Decimal              @db.Decimal(20, 4) @map("exchange_rate_to_vnd")
+  amountVnd          Decimal              @db.Decimal(20, 4) @map("amount_vnd")
+  description        String
+  notes              Json?
+  transactionDate    DateTime             @map("transaction_date")
+  paymentMethod      String               @map("payment_method")
+  paymentAccountId   String?              @map("payment_account_id")
+  createdBy          String               @map("created_by")
+  approvedBy         String?              @map("approved_by")
+  purchaseRequestId  String?              @map("purchase_request_id")
+  status             String               @default("RECORDED")
+  createdAt          DateTime             @default(now()) @map("created_at")
+  updatedAt          DateTime             @updatedAt @map("updated_at")
+  teamUser           User?                @relation("TransactionTeamUser", fields: [teamUserId], references: [id])
+  category           TransactionCategory  @relation(fields: [categoryId], references: [id])
+  currency           Currency             @relation(fields: [currencyCode], references: [code])
+  creator            User                 @relation("TransactionCreatedBy", fields: [createdBy], references: [id])
+  approver           User?                @relation("TransactionApprovedBy", fields: [approvedBy], references: [id])
+  purchaseRequest    PurchaseRequest?     @relation(fields: [purchaseRequestId], references: [id])
+  paymentAccount     PaymentAccount?      @relation(fields: [paymentAccountId], references: [id], onDelete: SetNull)
+  receiptImages      ReceiptImage[]
+  adjustments        TransactionAdjustment[]
+
+  @@index([teamUserId, transactionDate])
+  @@index([transactionDate, status])
+  @@index([categoryId])
+  @@index([paymentAccountId])
+  @@map("transactions")
+}
+
+model TransactionAdjustment {
+  id            String                    @id @default(cuid())
+  transactionId String                    @map("transaction_id")
+  requestedBy   String                    @map("requested_by")
+  approvedBy    String?                   @map("approved_by")
+  status        TransactionAdjustmentStatus @default(PENDING)
+  reason        String
+  reviewNote    String?                   @map("review_note")
+  beforePayload Json?                     @map("before_payload")
+  afterPayload  Json?                     @map("after_payload")
+  payload       Json
+  requestedAt   DateTime                  @default(now()) @map("requested_at")
+  decidedAt     DateTime?                 @map("decided_at")
+  createdAt     DateTime                  @default(now()) @map("created_at")
+  updatedAt     DateTime                  @updatedAt @map("updated_at")
+  transaction   Transaction               @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  requester     User                      @relation("TransactionAdjustmentRequestedBy", fields: [requestedBy], references: [id])
+  approver      User?                     @relation("TransactionAdjustmentApprovedBy", fields: [approvedBy], references: [id])
+
+  @@index([transactionId, requestedAt])
+  @@index([status, requestedAt])
+  @@map("transaction_adjustments")
+}
+
+model ReceiptImage {
+  id                String          @id @default(cuid())
+  purchaseRequestId String?         @map("purchase_request_id")
+  transactionId     String?         @map("transaction_id")
+  uploadedBy        String          @map("uploaded_by")
+  filePath          String          @map("file_path")
+  fileName          String          @map("file_name")
+  mimeType          String          @map("mime_type")
+  size              Int
+  createdAt         DateTime        @default(now()) @map("created_at")
+  purchaseRequest   PurchaseRequest? @relation(fields: [purchaseRequestId], references: [id], onDelete: SetNull)
+  transaction       Transaction?    @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  uploader          User            @relation("ReceiptUploadedBy", fields: [uploadedBy], references: [id])
+
+  @@index([purchaseRequestId, createdAt])
+  @@index([transactionId])
+  @@map("receipt_images")
+}
+
+model AuditLog {
+  id                String   @id @default(cuid())
+  actorId           String?  @map("actor_id")
+  actorRoleSnapshot String   @map("actor_role_snapshot")
+  action            String
+  entityType        String   @map("entity_type")
+  entityId          String   @map("entity_id")
+  beforeData        Json?    @map("before_data")
+  afterData         Json?    @map("after_data")
+  ipAddress         String?  @map("ip_address")
+  userAgent         String?  @map("user_agent")
+  requestId         String   @map("request_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+  actor             User?    @relation(fields: [actorId], references: [id])
+
+  @@index([entityType, entityId, createdAt])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model AppSetting {
+  key       String   @id
+  value     String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("app_settings")
+}
