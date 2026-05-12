@@ -14,5 +14,5 @@ export function getBaseUrl() {
       // Fallback to local URL when env value is invalid
     }
   }
-  return new URL(`http://localhost:${process.env.PORT ?? 3000}`);
+  return new URL(process.env.URL ?? "http://localhost:3515");
 }
