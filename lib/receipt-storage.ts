@@ -11,6 +11,9 @@ export function mapReceiptStorageError(error: unknown) {
     if (error.message === "RECEIPT_FILE_TOO_LARGE") {
       return `Ảnh chứng từ tối đa ${Math.floor(MAX_RECEIPT_FILE_SIZE_BYTES / (1024 * 1024))}MB`;
     }
+    if (error.message === "RECEIPT_STORAGE_NOT_CONFIGURED") {
+      return "Hệ thống lưu trữ ảnh chưa được cấu hình (thiếu biến môi trường DO_SPACES_*). Liên hệ quản trị viên.";
+    }
   }
   return null;
 }
@@ -36,7 +39,7 @@ function createSpacesConfig() {
   const bucket2Raw = process.env.DO_SPACES_BUCKET2 ?? "";
 
   if (!accessKeyId || !secretAccessKey || !endpoint || !bucket || !region) {
-    throw new Error("Missing DO Spaces environment variables");
+    throw new Error("RECEIPT_STORAGE_NOT_CONFIGURED");
   }
 
   const endpointUrl = endpoint.startsWith("http://") || endpoint.startsWith("https://") ? endpoint : `https://${endpoint}`;

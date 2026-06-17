@@ -23,16 +23,34 @@ export async function GET(request: Request) {
   const canReadAllLogs = hasPermission(auth.user.roles, "audit.read");
 
   if (!canReadAllLogs) {
-    if (entityType !== "purchase_request" || !entityId) {
+    if (!entityId) {
       return forbidden();
     }
 
-    const purchaseRequest = await prisma.purchaseRequest.findUnique({
-      where: { id: entityId },
-      select: { requesterId: true },
-    });
+    if (entityType === "purchase_request") {
+      const purchaseRequest = await prisma.purchaseRequest.findUnique({
+        where: { id: entityId },
+        select: { requesterId: true },
+      });
 
-    if (!purchaseRequest || purchaseRequest.requesterId !== auth.user.id) {
+      if (!purchaseRequest || purchaseRequest.requesterId !== auth.user.id) {
+        return forbidden();
+      }
+    } else if (entityType === "transaction") {
+      const canReadAllTransactions =
+        auth.user.roles.includes("ADMIN") || auth.user.roles.includes("ACCOUNTANT");
+
+      if (!canReadAllTransactions) {
+        const transaction = await prisma.transaction.findUnique({
+          where: { id: entityId },
+          select: { teamUsers: { select: { userId: true } } },
+        });
+
+        if (!transaction || !transaction.teamUsers.some((link) => link.userId === auth.user.id)) {
+          return forbidden();
+        }
+      }
+    } else {
       return forbidden();
     }
   }
