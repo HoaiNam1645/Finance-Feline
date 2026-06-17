@@ -238,7 +238,7 @@ async function main() {
 
   const seedTransactions: Array<{
     direction: TransactionDirection;
-    teamUserId?: string | null;
+    teamUserIds?: string[];
     categoryId: string;
     amountOriginal: number;
     currencyCode: "VND" | "USD";
@@ -266,7 +266,7 @@ async function main() {
 
       seedTransactions.push({
         direction: TransactionDirection.IN,
-        teamUserId: i % 5 === 0 ? null : employee.id,
+        teamUserIds: i % 5 === 0 ? [] : [employee.id],
         categoryId: incomeCategory.id,
         amountOriginal: incomeOriginal,
         currencyCode: incomeIsUsd ? "USD" : "VND",
@@ -287,7 +287,7 @@ async function main() {
 
       seedTransactions.push({
         direction: TransactionDirection.OUT,
-        teamUserId: i % 4 === 0 ? null : employee.id,
+        teamUserIds: i % 4 === 0 ? [] : [employee.id],
         categoryId: expenseCategory.id,
         amountOriginal: expenseOriginal,
         currencyCode: expenseIsUsd ? "USD" : "VND",
@@ -306,7 +306,9 @@ async function main() {
     await prisma.transaction.create({
       data: {
         direction: tx.direction,
-        ...(typeof tx.teamUserId !== "undefined" ? { teamUserId: tx.teamUserId } : {}),
+        ...(tx.teamUserIds && tx.teamUserIds.length > 0
+          ? { teamUsers: { create: tx.teamUserIds.map((userId) => ({ userId })) } }
+          : {}),
         categoryId: tx.categoryId,
         amountOriginal: tx.amountOriginal,
         currencyCode: tx.currencyCode,

@@ -13,7 +13,9 @@ const reviewSchema = z.object({
 
 const payloadSchema = z.object({
   direction: z.enum(["IN", "OUT"]),
-  teamUserId: z.string().nullable(),
+  // New adjustments store an array; older ones stored a single nullable teamUserId.
+  teamUserIds: z.array(z.string()).optional(),
+  teamUserId: z.string().nullable().optional(),
   categoryId: z.string(),
   amountOriginal: z.number().positive(),
   currencyCode: z.enum(["VND", "USD"]),
@@ -55,6 +57,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ adj
     return fail("Dữ liệu điều chỉnh không hợp lệ", 400);
   }
   const payload = payloadParsed.data;
+  const teamUserIds = Array.from(
+    new Set(payload.teamUserIds ?? (payload.teamUserId ? [payload.teamUserId] : []))
+  );
 
   if (parsed.data.action === "REJECT") {
     const row = await prisma.transactionAdjustment.update({
@@ -102,7 +107,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ adj
       where: { id: adjustment.transactionId },
       data: {
         direction: payload.direction,
-        teamUserId: payload.teamUserId,
+        teamUsers: { deleteMany: {}, create: teamUserIds.map((userId) => ({ userId })) },
         categoryId: payload.categoryId,
         amountOriginal: payload.amountOriginal,
         currencyCode: payload.currencyCode,

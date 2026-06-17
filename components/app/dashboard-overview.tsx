@@ -18,8 +18,7 @@ type DashboardTransaction = {
   transactionDate: string;
   categoryName: string;
   categoryParentName: string | null;
-  teamUserId: string | null;
-  teamUserName: string | null;
+  teamUsers: Array<{ id: string; name: string }>;
   description: string;
 };
 
@@ -159,7 +158,9 @@ export function DashboardOverview({ transactions, teamUsers }: OverviewProps) {
       const to = range.to;
       const filteredTransactions = transactions.filter((transaction) =>
         inRange(new Date(transaction.transactionDate), from, to) &&
-        (teamUserFilter === "__ALL__" ? true : transaction.teamUserId === teamUserFilter)
+        (teamUserFilter === "__ALL__"
+          ? true
+          : transaction.teamUsers.some((member) => member.id === teamUserFilter))
       );
 
       const buckets = new Map<string, { label: string; income: number; expense: number; order: number }>();
@@ -228,11 +229,14 @@ export function DashboardOverview({ transactions, teamUsers }: OverviewProps) {
             parent.own += transaction.amountVnd;
           }
           incomeMap.set(parentKey, parent);
-          const teamKey = transaction.teamUserId ?? "__UNASSIGNED__";
-          const teamName = transaction.teamUserName ?? "Giao dịch không ở trong team";
-          const current = teamMap.get(teamKey) ?? { name: teamName, income: 0, expense: 0 };
-          current.income += transaction.amountVnd;
-          teamMap.set(teamKey, current);
+          const members = transaction.teamUsers.length
+            ? transaction.teamUsers.map((member) => ({ key: member.id, name: member.name }))
+            : [{ key: "__UNASSIGNED__", name: "Giao dịch không ở trong team" }];
+          for (const member of members) {
+            const current = teamMap.get(member.key) ?? { name: member.name, income: 0, expense: 0 };
+            current.income += transaction.amountVnd;
+            teamMap.set(member.key, current);
+          }
         } else {
           bucket.expense += transaction.amountVnd;
           expenseTotal += transaction.amountVnd;
@@ -247,11 +251,14 @@ export function DashboardOverview({ transactions, teamUsers }: OverviewProps) {
             parent.own += transaction.amountVnd;
           }
           expenseMap.set(parentKey, parent);
-          const teamKey = transaction.teamUserId ?? "__UNASSIGNED__";
-          const teamName = transaction.teamUserName ?? "Giao dịch không ở trong team";
-          const current = teamMap.get(teamKey) ?? { name: teamName, income: 0, expense: 0 };
-          current.expense += transaction.amountVnd;
-          teamMap.set(teamKey, current);
+          const members = transaction.teamUsers.length
+            ? transaction.teamUsers.map((member) => ({ key: member.id, name: member.name }))
+            : [{ key: "__UNASSIGNED__", name: "Giao dịch không ở trong team" }];
+          for (const member of members) {
+            const current = teamMap.get(member.key) ?? { name: member.name, income: 0, expense: 0 };
+            current.expense += transaction.amountVnd;
+            teamMap.set(member.key, current);
+          }
         }
       }
 

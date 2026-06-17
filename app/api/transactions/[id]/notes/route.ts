@@ -55,14 +55,14 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
     where: { id },
     select: {
       id: true,
-      teamUserId: true,
+      teamUsers: { select: { userId: true } },
       notes: true,
     },
   });
   if (!row) {
     return fail("Giao dịch không tồn tại", 404);
   }
-  if (!canReadAllTransactions && row.teamUserId !== auth.user.id) {
+  if (!canReadAllTransactions && !row.teamUsers.some((link) => link.userId === auth.user.id)) {
     return fail("Giao dịch không tồn tại", 404);
   }
 

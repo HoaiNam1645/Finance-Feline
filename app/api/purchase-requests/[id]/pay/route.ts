@@ -169,7 +169,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       const transaction = await tx.transaction.create({
         data: {
           direction: "OUT",
-          teamUserId: purchaseRequest.requesterId,
+          teamUsers: { create: { userId: purchaseRequest.requesterId } },
           categoryId: category.id,
           amountOriginal,
           currencyCode: actualCurrencyCode,

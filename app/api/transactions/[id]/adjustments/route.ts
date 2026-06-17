@@ -6,7 +6,7 @@ import { fail, forbidden, ok, unauthorized } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 
 const createAdjustmentSchema = z.object({
-  teamUserId: z.preprocess((value) => (value === "" || value == null ? undefined : value), z.string().min(1).optional()),
+  teamUserIds: z.array(z.string().min(1)).optional(),
   categoryId: z.string().min(1),
   amountOriginal: z.number().positive(),
   currencyCode: z.enum(["VND", "USD"]),
@@ -28,13 +28,13 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
     where: { id },
     select: {
       id: true,
-      teamUserId: true,
+      teamUsers: { select: { userId: true } },
     },
   });
   if (!transaction) {
     return fail("Giao dịch không tồn tại", 404);
   }
-  if (!canReadAllTransactions && transaction.teamUserId !== auth.user.id) {
+  if (!canReadAllTransactions && !transaction.teamUsers.some((link) => link.userId === auth.user.id)) {
     return fail("Giao dịch không tồn tại", 404);
   }
 
@@ -63,7 +63,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       id: true,
       direction: true,
       categoryId: true,
-      teamUserId: true,
+      teamUsers: { select: { userId: true } },
       amountOriginal: true,
       currencyCode: true,
       exchangeRateToVnd: true,
@@ -106,15 +106,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     return fail("Danh mục không hợp lệ", 400);
   }
 
-  if (typeof parsed.data.teamUserId !== "undefined") {
-    const teamUser = await prisma.user.findFirst({
+  const teamUserIds = Array.from(new Set(parsed.data.teamUserIds ?? []));
+  if (teamUserIds.length > 0) {
+    const activeTeamUsers = await prisma.user.findMany({
       where: {
-        id: parsed.data.teamUserId,
+        id: { in: teamUserIds },
         status: "ACTIVE",
       },
       select: { id: true },
     });
-    if (!teamUser) {
+    if (activeTeamUsers.length !== teamUserIds.length) {
       return fail("User team không hợp lệ", 400);
     }
   }
@@ -137,7 +138,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const amountVnd = parsed.data.amountOriginal * exchangeRateToVnd;
   const beforePayload = {
     direction: current.direction,
-    teamUserId: current.teamUserId,
+    teamUserIds: current.teamUsers.map((link) => link.userId),
     categoryId: current.categoryId,
     amountOriginal: Number(current.amountOriginal),
     currencyCode: current.currencyCode,
@@ -149,7 +150,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   };
   const afterPayload = {
     direction,
-    teamUserId: parsed.data.teamUserId ?? null,
+    teamUserIds,
     categoryId: parsed.data.categoryId,
     amountOriginal: parsed.data.amountOriginal,
     currencyCode: parsed.data.currencyCode,

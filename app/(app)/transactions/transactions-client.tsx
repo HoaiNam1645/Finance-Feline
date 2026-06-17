@@ -3,7 +3,7 @@
 import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ArrowUpDown, CalendarIcon, ChevronRight, Loader2 } from "lucide-react";
+import { ArrowUpDown, CalendarIcon, Check, ChevronRight, Loader2 } from "lucide-react";
 import { type DateRange } from "react-day-picker";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -40,10 +40,10 @@ type Transaction = {
   transactionDate: string;
   createdAt: string;
   updatedAt: string;
-  teamUser?: {
+  teamUsers?: Array<{
     id: string;
     fullName: string;
-  } | null;
+  }>;
   creator?: {
     fullName: string;
   } | null;
@@ -110,7 +110,8 @@ type TransactionAdjustment = {
   reviewNote: string | null;
   beforePayload?: {
     direction: "IN" | "OUT";
-    teamUserId: string | null;
+    teamUserIds?: string[];
+    teamUserId?: string | null;
     categoryId: string;
     amountOriginal: number;
     currencyCode: "VND" | "USD";
@@ -122,7 +123,8 @@ type TransactionAdjustment = {
   } | null;
   afterPayload?: {
     direction: "IN" | "OUT";
-    teamUserId: string | null;
+    teamUserIds?: string[];
+    teamUserId?: string | null;
     categoryId: string;
     amountOriginal: number;
     currencyCode: "VND" | "USD";
@@ -134,7 +136,8 @@ type TransactionAdjustment = {
   } | null;
   payload: {
     direction: "IN" | "OUT";
-    teamUserId: string | null;
+    teamUserIds?: string[];
+    teamUserId?: string | null;
     categoryId: string;
     amountOriginal: number;
     currencyCode: "VND" | "USD";
@@ -176,6 +179,16 @@ function categoryLabelById(categories: Category[], id: string | null | undefined
 function teamUserLabelById(teamUsers: TeamUser[], id: string | null | undefined) {
   if (!id) return "-";
   return teamUsers.find((item) => item.id === id)?.fullName ?? id;
+}
+
+function teamUsersLabel(
+  teamUsers: TeamUser[],
+  payload: { teamUserIds?: string[]; teamUserId?: string | null } | null | undefined
+) {
+  if (!payload) return "-";
+  const ids = payload.teamUserIds ?? (payload.teamUserId ? [payload.teamUserId] : []);
+  if (!ids.length) return "-";
+  return ids.map((id) => teamUsers.find((item) => item.id === id)?.fullName ?? id).join(", ");
 }
 
 function paymentAccountLabelById(paymentAccounts: PaymentAccount[], id: string | null | undefined) {
@@ -458,6 +471,81 @@ function actionBadgeClass(action: string) {
   return "bg-slate-100 text-slate-700 border-slate-200";
 }
 
+function TeamUserMultiSelect({
+  teamUsers,
+  selectedIds,
+  onChange,
+  disabled,
+}: {
+  teamUsers: TeamUser[];
+  selectedIds: string[];
+  onChange: (ids: string[]) => void;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const selectedSet = new Set(selectedIds);
+  const selectedNames = teamUsers.filter((user) => selectedSet.has(user.id)).map((user) => user.fullName);
+
+  function toggle(id: string) {
+    if (selectedSet.has(id)) {
+      onChange(selectedIds.filter((item) => item !== id));
+    } else {
+      onChange([...selectedIds, id]);
+    }
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          className="h-auto min-h-9 w-full justify-start whitespace-normal text-left font-normal"
+          disabled={disabled}
+        >
+          {selectedNames.length ? selectedNames.join(", ") : "Chọn nhân viên"}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[320px] p-0" align="start">
+        <div className="max-h-[260px] overflow-y-auto p-1">
+          {teamUsers.length ? (
+            teamUsers.map((user) => {
+              const checked = selectedSet.has(user.id);
+              return (
+                <button
+                  key={user.id}
+                  type="button"
+                  onClick={() => toggle(user.id)}
+                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-muted"
+                >
+                  <span
+                    className={`flex size-4 shrink-0 items-center justify-center rounded border ${
+                      checked ? "border-primary bg-primary text-primary-foreground" : "bg-background"
+                    }`}
+                  >
+                    {checked ? <Check className="size-3" /> : null}
+                  </span>
+                  {user.fullName}
+                </button>
+              );
+            })
+          ) : (
+            <p className="px-2 py-1.5 text-sm text-muted-foreground">Không có nhân viên.</p>
+          )}
+        </div>
+        {selectedNames.length ? (
+          <div className="flex items-center justify-between border-t p-2">
+            <span className="text-xs text-muted-foreground">{selectedNames.length} đã chọn</span>
+            <Button type="button" size="xs" variant="ghost" onClick={() => onChange([])}>
+              Bỏ chọn
+            </Button>
+          </div>
+        ) : null}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 export default function TransactionsPage() {
   const router = useRouter();
   const pathname = usePathname();
@@ -468,7 +556,7 @@ export default function TransactionsPage() {
   const [roles, setRoles] = useState<string[]>([]);
   const [currentUserEmail, setCurrentUserEmail] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
-  const [createTeamUserId, setCreateTeamUserId] = useState("");
+  const [createTeamUserIds, setCreateTeamUserIds] = useState<string[]>([]);
   const [paymentAccounts, setPaymentAccounts] = useState<PaymentAccount[]>([]);
   const [createPaymentAccountId, setCreatePaymentAccountId] = useState("");
   const [createDirection, setCreateDirection] = useState<CreateDirection>("OUT");
@@ -544,7 +632,7 @@ export default function TransactionsPage() {
   const [adjustmentHistory, setAdjustmentHistory] = useState<TransactionAdjustment[]>([]);
   const [adjustmentHistoryLoading, setAdjustmentHistoryLoading] = useState(false);
   const [adjustReason, setAdjustReason] = useState("");
-  const [adjustTeamUserId, setAdjustTeamUserId] = useState("");
+  const [adjustTeamUserIds, setAdjustTeamUserIds] = useState<string[]>([]);
   const [adjustPaymentAccountId, setAdjustPaymentAccountId] = useState("");
   const [adjustCategoryId, setAdjustCategoryId] = useState("");
   const [adjustAmountInput, setAdjustAmountInput] = useState("");
@@ -762,7 +850,7 @@ export default function TransactionsPage() {
     setOpeningAdjustRowId(row.id);
     setAdjustingRow(row);
     setAdjustReason("");
-    setAdjustTeamUserId(row.teamUser?.id ?? "");
+    setAdjustTeamUserIds(row.teamUsers?.map((user) => user.id) ?? []);
     setAdjustPaymentAccountId(row.paymentAccount?.id ?? "");
     setAdjustCategoryId(row.category.id);
     setAdjustAmountInput(String(Number(row.amountOriginal)));
@@ -842,7 +930,7 @@ export default function TransactionsPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          teamUserId: adjustTeamUserId || undefined,
+          teamUserIds: adjustTeamUserIds,
           paymentAccountId: adjustPaymentAccountId || undefined,
           categoryId: adjustCategoryId,
           amountOriginal,
@@ -914,8 +1002,8 @@ export default function TransactionsPage() {
     try {
       const formData = new FormData();
       formData.append("categoryId", createCategoryId);
-      if (createTeamUserId) {
-        formData.append("teamUserId", createTeamUserId);
+      for (const teamUserId of createTeamUserIds) {
+        formData.append("teamUserIds", teamUserId);
       }
       if (createPaymentAccountId) {
         formData.append("paymentAccountId", createPaymentAccountId);
@@ -942,7 +1030,7 @@ export default function TransactionsPage() {
 
       toast.success("Đã tạo giao dịch");
       setCreateOpen(false);
-      setCreateTeamUserId("");
+      setCreateTeamUserIds([]);
       setCreatePaymentAccountId("");
       setCreateDirection("OUT");
       setCreateCategoryId("");
@@ -1286,7 +1374,7 @@ export default function TransactionsPage() {
         new Date(row.updatedAt).toLocaleString("vi-VN"),
         row.direction === "IN" ? "Thu" : "Chi",
         row.creator?.fullName ?? "-",
-        row.teamUser?.fullName ?? "-",
+        row.teamUsers?.length ? row.teamUsers.map((user) => user.fullName).join(" | ") : "-",
         paymentAccountLabel,
         row.paymentAccount?.bankName ?? "-",
         row.paymentAccount?.accountNumber ?? "-",
@@ -1705,7 +1793,9 @@ export default function TransactionsPage() {
                     {Number(row.amountVnd).toLocaleString("vi-VN")}
                   </TableCell>
                   <TableCell>{row.creator?.fullName ?? "-"}</TableCell>
-                  <TableCell>{row.teamUser?.fullName ?? "-"}</TableCell>
+                  <TableCell>
+                    {row.teamUsers?.length ? row.teamUsers.map((user) => user.fullName).join(", ") : "-"}
+                  </TableCell>
                   <TableCell>
                     {row.paymentAccount
                       ? `${row.paymentAccount.accountName} - ${row.paymentAccount.bankName}`
@@ -2194,7 +2284,7 @@ export default function TransactionsPage() {
                     </p>
                     <p className="mt-1 text-xs">Loại GD: {directionLabel(before?.direction)}</p>
                     <p className="mt-1 text-xs">Danh mục: {categoryLabelById(categories, before?.categoryId)}</p>
-                    <p className="mt-1 text-xs">Nhân viên: {teamUserLabelById(teamUsers, before?.teamUserId)}</p>
+                    <p className="mt-1 text-xs">Nhân viên: {teamUsersLabel(teamUsers, before)}</p>
                     <p className="mt-1 text-xs">
                       Tài khoản: {paymentAccountLabelById(paymentAccounts, before?.paymentAccountId)}
                     </p>
@@ -2210,7 +2300,7 @@ export default function TransactionsPage() {
                     </p>
                     <p className="mt-1 text-xs">Loại GD: {directionLabel(after.direction)}</p>
                     <p className="mt-1 text-xs">Danh mục: {categoryLabelById(categories, after.categoryId)}</p>
-                    <p className="mt-1 text-xs">Nhân viên: {teamUserLabelById(teamUsers, after.teamUserId)}</p>
+                    <p className="mt-1 text-xs">Nhân viên: {teamUsersLabel(teamUsers, after)}</p>
                     <p className="mt-1 text-xs">
                       Tài khoản: {paymentAccountLabelById(paymentAccounts, after.paymentAccountId)}
                     </p>
@@ -2280,23 +2370,12 @@ export default function TransactionsPage() {
                   </p>
                 </div>
                 <div className="grid gap-2">
-                  <Label>Nhân viên (không bắt buộc)</Label>
-                  <Select
-                    value={adjustTeamUserId || "__NONE__"}
-                    onValueChange={(value) => setAdjustTeamUserId(value === "__NONE__" ? "" : value)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Chọn nhân viên" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__NONE__">Chọn nhân viên</SelectItem>
-                      {teamUsers.map((user) => (
-                        <SelectItem key={user.id} value={user.id}>
-                          {user.fullName}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <Label>Nhân viên (không bắt buộc, có thể chọn nhiều)</Label>
+                  <TeamUserMultiSelect
+                    teamUsers={teamUsers}
+                    selectedIds={adjustTeamUserIds}
+                    onChange={setAdjustTeamUserIds}
+                  />
                 </div>
                 <div className="grid gap-2">
                   <Label>Tài khoản thanh toán (không bắt buộc)</Label>
@@ -2409,7 +2488,7 @@ export default function TransactionsPage() {
                               </p>
                               <p className="mt-1 text-xs">Loại GD: {directionLabel(before?.direction)}</p>
                               <p className="mt-1 text-xs">Danh mục: {categoryLabelById(categories, before?.categoryId)}</p>
-                              <p className="mt-1 text-xs">Nhân viên: {teamUserLabelById(teamUsers, before?.teamUserId)}</p>
+                              <p className="mt-1 text-xs">Nhân viên: {teamUsersLabel(teamUsers, before)}</p>
                               <p className="mt-1 text-xs">
                                 Tài khoản: {paymentAccountLabelById(paymentAccounts, before?.paymentAccountId)}
                               </p>
@@ -2425,7 +2504,7 @@ export default function TransactionsPage() {
                               </p>
                               <p className="mt-1 text-xs">Loại GD: {directionLabel(after.direction)}</p>
                               <p className="mt-1 text-xs">Danh mục: {categoryLabelById(categories, after.categoryId)}</p>
-                              <p className="mt-1 text-xs">Nhân viên: {teamUserLabelById(teamUsers, after.teamUserId)}</p>
+                              <p className="mt-1 text-xs">Nhân viên: {teamUsersLabel(teamUsers, after)}</p>
                               <p className="mt-1 text-xs">
                                 Tài khoản: {paymentAccountLabelById(paymentAccounts, after.paymentAccountId)}
                               </p>
@@ -2457,23 +2536,13 @@ export default function TransactionsPage() {
           </DialogHeader>
           <div className="space-y-3">
             <div className="grid gap-2">
-              <Label>Nhân viên (không bắt buộc)</Label>
-              <Select
-                value={createTeamUserId || "__NONE__"}
-                onValueChange={(value) => setCreateTeamUserId(value === "__NONE__" ? "" : value)}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Chọn nhân viên" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__NONE__">Chọn nhân viên</SelectItem>
-                  {teamUsers.map((user) => (
-                    <SelectItem key={user.id} value={user.id}>
-                      {user.fullName}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label>Nhân viên (không bắt buộc, có thể chọn nhiều)</Label>
+              <TeamUserMultiSelect
+                teamUsers={teamUsers}
+                selectedIds={createTeamUserIds}
+                onChange={setCreateTeamUserIds}
+                disabled={creating}
+              />
             </div>
 
             <div className="grid gap-2">

@@ -55,7 +55,7 @@ model User {
   approvals        PurchaseRequestApproval[]
   transactionsMade Transaction[]         @relation("TransactionCreatedBy")
   transactionsOk   Transaction[]         @relation("TransactionApprovedBy")
-  transactionsAsTeam Transaction[]       @relation("TransactionTeamUser")
+  transactionTeamLinks TransactionTeamUser[] @relation("TransactionTeamUser")
   receiptImages    ReceiptImage[]        @relation("ReceiptUploadedBy")
   auditLogs        AuditLog[]
   requestedTransactionAdjustments TransactionAdjustment[] @relation("TransactionAdjustmentRequestedBy")
@@ -218,7 +218,6 @@ model PurchaseRequestApproval {
 model Transaction {
   id                 String               @id @default(cuid())
   direction          TransactionDirection
-  teamUserId         String?              @map("team_user_id")
   categoryId         String               @map("category_id")
   amountOriginal     Decimal              @db.Decimal(20, 4) @map("amount_original")
   currencyCode       String               @map("currency_code")
@@ -235,7 +234,7 @@ model Transaction {
   status             String               @default("RECORDED")
   createdAt          DateTime             @default(now()) @map("created_at")
   updatedAt          DateTime             @updatedAt @map("updated_at")
-  teamUser           User?                @relation("TransactionTeamUser", fields: [teamUserId], references: [id])
+  teamUsers          TransactionTeamUser[]
   category           TransactionCategory  @relation(fields: [categoryId], references: [id])
   currency           Currency             @relation(fields: [currencyCode], references: [code])
   creator            User                 @relation("TransactionCreatedBy", fields: [createdBy], references: [id])
@@ -245,11 +244,21 @@ model Transaction {
   receiptImages      ReceiptImage[]
   adjustments        TransactionAdjustment[]
 
-  @@index([teamUserId, transactionDate])
   @@index([transactionDate, status])
   @@index([categoryId])
   @@index([paymentAccountId])
   @@map("transactions")
+}
+
+model TransactionTeamUser {
+  transactionId String      @map("transaction_id")
+  userId        String      @map("user_id")
+  transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  user          User        @relation("TransactionTeamUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([transactionId, userId])
+  @@index([userId])
+  @@map("transaction_team_users")
 }
 
 model TransactionAdjustment {

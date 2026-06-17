@@ -49,7 +49,7 @@ function normalizeReceiptPath(filePath: string) {
 }
 
 const schema = z.object({
-  teamUserId: z.preprocess((value) => (value === "" || value == null ? undefined : value), z.string().min(1).optional()),
+  teamUserIds: z.array(z.string().min(1)).optional(),
   paymentAccountId: z.preprocess((value) => (value === "" || value == null ? undefined : value), z.string().min(1).optional()),
   categoryId: z.string().min(1),
   amountOriginal: z.number().positive(),
@@ -78,8 +78,13 @@ async function parseCreateInput(request: Request): Promise<{ payload: CreatePayl
       }
     }
 
+    const teamUserIds = formData
+      .getAll("teamUserIds")
+      .map((value) => String(value))
+      .filter((value) => value.length > 0);
+
     const parsed = schema.safeParse({
-      teamUserId: formData.get("teamUserId"),
+      teamUserIds,
       paymentAccountId: formData.get("paymentAccountId"),
       categoryId: String(formData.get("categoryId") ?? ""),
       amountOriginal: parseNumberInput(formData.get("amountOriginal")),
@@ -131,10 +136,10 @@ export async function GET(request: Request) {
     ...(canReadAllTransactions
       ? teamUserIdParam && teamUserIdParam !== "__ALL__"
         ? teamUserIdParam === "__UNASSIGNED__"
-          ? { teamUserId: null }
-          : { teamUserId: teamUserIdParam }
+          ? { teamUsers: { none: {} } }
+          : { teamUsers: { some: { userId: teamUserIdParam } } }
         : {}
-      : { teamUserId: auth.user.id }),
+      : { teamUsers: { some: { userId: auth.user.id } } }),
     ...(categoryIdParam && categoryIdParam !== "__ALL__" ? { categoryId: categoryIdParam } : {}),
     ...(paymentAccountIdParam && paymentAccountIdParam !== "__ALL__"
       ? paymentAccountIdParam === "__NONE__"
@@ -169,10 +174,14 @@ export async function GET(request: Request) {
           },
         },
       },
-      teamUser: {
+      teamUsers: {
         select: {
-          id: true,
-          fullName: true,
+          user: {
+            select: {
+              id: true,
+              fullName: true,
+            },
+          },
         },
       },
       creator: { select: { fullName: true } },
@@ -288,6 +297,7 @@ export async function GET(request: Request) {
       type: row.category.type,
       parentName: row.category.parent?.name ?? null,
     },
+    teamUsers: row.teamUsers.map((link: (typeof row.teamUsers)[number]) => link.user),
     notes: parseNotes(row.notes),
     receiptImages: (row.receiptImages.length > 0 ? row.receiptImages : row.purchaseRequest?.receiptImages ?? []).map((image: {
       id: string;
@@ -333,15 +343,16 @@ export async function POST(request: Request) {
     return fail("Danh mục không hợp lệ", 400);
   }
 
-  if (payload.teamUserId) {
-    const teamUser = await prisma.user.findFirst({
+  const teamUserIds = Array.from(new Set(payload.teamUserIds ?? []));
+  if (teamUserIds.length > 0) {
+    const activeTeamUsers = await prisma.user.findMany({
       where: {
-        id: payload.teamUserId,
+        id: { in: teamUserIds },
         status: "ACTIVE",
       },
       select: { id: true },
     });
-    if (!teamUser) {
+    if (activeTeamUsers.length !== teamUserIds.length) {
       return fail("User team không hợp lệ", 400);
     }
   }
@@ -379,7 +390,9 @@ export async function POST(request: Request) {
     const row = await tx.transaction.create({
       data: {
         direction,
-        teamUserId: payload.teamUserId ?? null,
+        ...(teamUserIds.length > 0
+          ? { teamUsers: { create: teamUserIds.map((userId) => ({ userId })) } }
+          : {}),
         paymentAccountId: payload.paymentAccountId ?? null,
         categoryId: payload.categoryId,
         amountOriginal: payload.amountOriginal,

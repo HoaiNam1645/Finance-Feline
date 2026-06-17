@@ -44,14 +44,14 @@ export default async function DashboardPage() {
         prisma.transaction.groupBy({
           by: ["direction"],
           where: {
-            teamUserId: user.id,
+            teamUsers: { some: { userId: user.id } },
             transactionDate: { gte: startOfMonth },
           },
           _count: { _all: true },
           _sum: { amountVnd: true },
         }),
         prisma.transaction.findMany({
-          where: { teamUserId: user.id },
+          where: { teamUsers: { some: { userId: user.id } } },
           orderBy: { transactionDate: "desc" },
           take: 8,
           select: {
@@ -148,7 +148,7 @@ export default async function DashboardPage() {
       transactionDate: true,
       description: true,
       category: { select: { name: true, parent: { select: { name: true } } } },
-      teamUser: { select: { id: true, fullName: true } },
+      teamUsers: { select: { user: { select: { id: true, fullName: true } } } },
     },
   });
 
@@ -197,8 +197,10 @@ export default async function DashboardPage() {
         transactionDate: transaction.transactionDate.toISOString(),
         categoryName: transaction.category.name,
         categoryParentName: transaction.category.parent?.name ?? null,
-        teamUserId: transaction.teamUser?.id ?? null,
-        teamUserName: transaction.teamUser?.fullName ?? null,
+        teamUsers: transaction.teamUsers.map((link: (typeof transaction.teamUsers)[number]) => ({
+          id: link.user.id,
+          name: link.user.fullName,
+        })),
         description: transaction.description,
       }))}
     />

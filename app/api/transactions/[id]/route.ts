@@ -10,7 +10,7 @@ type TxClient = Omit<typeof prisma, "$connect" | "$disconnect" | "$on" | "$trans
 const SPECIAL_DELETE_EMAIL = "ngobao@bugmedia.vn";
 
 const updateSchema = z.object({
-  teamUserId: z.preprocess((value) => (value === "" || value == null ? undefined : value), z.string().min(1).optional()),
+  teamUserIds: z.array(z.string().min(1)).optional(),
   categoryId: z.string().min(1),
   amountOriginal: z.number().positive(),
   currencyCode: z.enum(["VND", "USD"]),
@@ -47,15 +47,17 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     return fail("Danh mục không hợp lệ", 400);
   }
 
-  if (typeof parsed.data.teamUserId !== "undefined") {
-    const teamUser = await prisma.user.findFirst({
+  const teamUserIds =
+    typeof parsed.data.teamUserIds !== "undefined" ? Array.from(new Set(parsed.data.teamUserIds)) : undefined;
+  if (teamUserIds && teamUserIds.length > 0) {
+    const activeTeamUsers = await prisma.user.findMany({
       where: {
-        id: parsed.data.teamUserId,
+        id: { in: teamUserIds },
         status: "ACTIVE",
       },
       select: { id: true },
     });
-    if (!teamUser) {
+    if (activeTeamUsers.length !== teamUserIds.length) {
       return fail("User team không hợp lệ", 400);
     }
   }
@@ -69,7 +71,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     where: { id },
     data: {
       direction,
-      ...(typeof parsed.data.teamUserId !== "undefined" ? { teamUserId: parsed.data.teamUserId ?? null } : {}),
+      ...(teamUserIds
+        ? { teamUsers: { deleteMany: {}, create: teamUserIds.map((userId) => ({ userId })) } }
+        : {}),
       categoryId: parsed.data.categoryId,
       amountOriginal: parsed.data.amountOriginal,
       currencyCode: parsed.data.currencyCode,

@@ -6,6 +6,7 @@
     "dev": "next dev -p 3515",
     "build": "next build",
     "start": "next start -p 3515",
+    "start:prod": "dotenv -e .env -- next start -p 3515",
     "lint": "eslint",
     "check:tx-team-user": "tsx scripts/check-transaction-team-user.ts",
     "fix:tx-team-user": "tsx scripts/check-transaction-team-user.ts --fix",
