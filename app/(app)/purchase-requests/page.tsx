@@ -36,6 +36,7 @@ type PurchaseRequestRow = {
   approvals?: Array<{
     id: string;
     action: "APPROVE" | "REJECT";
+    note: string;
     actor: { fullName: string };
     actedAt: string;
   }>;
@@ -307,6 +308,8 @@ export default function PurchaseRequestsPage() {
   } | null>(null);
   const [pendingReviewAnchorId, setPendingReviewAnchorId] = useState<string | null>(null);
   const [deletingRequestId, setDeletingRequestId] = useState<string | null>(null);
+  const [rejectTarget, setRejectTarget] = useState<{ id: string; title: string } | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
   const pageSize = 10;
   const expectedAmountValue = Number(expectedAmountInput);
   const amountInWords =
@@ -619,7 +622,7 @@ export default function PurchaseRequestsPage() {
     }
   }
 
-  async function runAction(id: string, action: "approve" | "reject") {
+  async function runAction(id: string, action: "approve" | "reject", note?: string): Promise<boolean> {
     const nextPendingOnCurrentPage = paginatedRows.find(
       (row) => row.id !== id && row.status === "PENDING_APPROVAL"
     )?.id;
@@ -630,34 +633,44 @@ export default function PurchaseRequestsPage() {
 
     const payload =
       action === "reject"
-        ? { note: "Từ chối do không đúng ngân sách" }
-        : action === "approve"
-          ? { note: "Đồng ý duyệt" }
-          : undefined;
+        ? { note: note ?? "" }
+        : { note: "Đồng ý duyệt" };
 
     setActionLoading({ id, action });
     try {
       const response = await fetch(`/api/purchase-requests/${id}/${action}`, {
         method: "POST",
-        headers: payload ? { "Content-Type": "application/json" } : undefined,
-        body: payload ? JSON.stringify(payload) : undefined,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
       });
 
       const data = await readResponseJsonSafe<{ error?: string }>(response);
       if (!response.ok) {
         toast.error(data.error ?? `${action} thất bại`);
-        return;
+        return false;
       }
 
-      const actionText =
-        action === "approve"
-          ? "Phê duyệt"
-          : "Từ chối";
+      const actionText = action === "approve" ? "Phê duyệt" : "Từ chối";
       toast.success(`${actionText} thành công`);
       setPendingReviewAnchorId(nextPendingAnchorId);
       await loadRows();
+      return true;
     } finally {
       setActionLoading(null);
+    }
+  }
+
+  async function submitReject() {
+    if (!rejectTarget) return;
+    const reason = rejectReason.trim();
+    if (reason.length < 2) {
+      toast.error("Vui lòng nhập lý do từ chối (tối thiểu 2 ký tự)");
+      return;
+    }
+    const ok = await runAction(rejectTarget.id, "reject", reason);
+    if (ok) {
+      setRejectTarget(null);
+      setRejectReason("");
     }
   }
 
@@ -977,7 +990,9 @@ export default function PurchaseRequestsPage() {
               <TableBody>
                 {paginatedRows.map((row, index) => {
                   const approvedBy = row.approvals?.find((approval) => approval.action === "APPROVE")?.actor.fullName;
-                  const rejectedBy = row.approvals?.find((approval) => approval.action === "REJECT")?.actor.fullName;
+                  const rejectApproval = row.approvals?.find((approval) => approval.action === "REJECT");
+                  const rejectedBy = rejectApproval?.actor.fullName;
+                  const rejectNote = rejectApproval?.note?.trim();
                   const reviewerName = row.status === "REJECTED" ? rejectedBy ?? "Chưa có" : approvedBy ?? "Chưa duyệt";
                   const confirmedBy = row.transactions?.[0]?.creator.fullName;
                   const transferNote = getTransferNote(row.transactions?.[0]);
@@ -1027,6 +1042,11 @@ export default function PurchaseRequestsPage() {
                         <Badge className={status.className} variant="outline">
                           {status.label}
                         </Badge>
+                        {row.status === "REJECTED" && rejectNote ? (
+                          <p className="mt-1 max-w-[220px] whitespace-pre-line text-xs text-rose-700">
+                            Lý do: {rejectNote}
+                          </p>
+                        ) : null}
                       </TableCell>
                       <TableCell className="align-top text-sm">{reviewerName}</TableCell>
                       <TableCell className="align-top text-sm">{confirmedBy ?? "Chưa xác nhận"}</TableCell>
@@ -1068,7 +1088,10 @@ export default function PurchaseRequestsPage() {
                               size="xs"
                               variant="destructive"
                               disabled={Boolean(rowActionLoading)}
-                              onClick={() => runAction(row.id, "reject")}
+                              onClick={() => {
+                                setRejectReason("");
+                                setRejectTarget({ id: row.id, title: row.title });
+                              }}
                             >
                               {rowActionLoading === "reject" ? "Đang từ chối..." : "Từ chối"}
                             </Button>
@@ -1683,6 +1706,64 @@ export default function PurchaseRequestsPage() {
               </Table>
             </div>
           ) : null}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(rejectTarget)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setRejectTarget(null);
+            setRejectReason("");
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Từ chối yêu cầu mua</DialogTitle>
+            <DialogDescription>
+              Nhập lý do từ chối để người yêu cầu biết mà bổ sung/chỉnh sửa.
+            </DialogDescription>
+          </DialogHeader>
+          {rejectTarget ? (
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">{rejectTarget.title}</p>
+              <div className="grid gap-2">
+                <Label htmlFor="reject-reason">Lý do từ chối</Label>
+                <Textarea
+                  id="reject-reason"
+                  value={rejectReason}
+                  onChange={(event) => setRejectReason(event.target.value)}
+                  placeholder="Ví dụ: Vượt ngân sách quý, thiếu báo giá, sai danh mục..."
+                  rows={4}
+                  maxLength={500}
+                  autoFocus
+                />
+                <p className="text-xs text-muted-foreground">{rejectReason.trim().length}/500 ký tự</p>
+              </div>
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={actionLoading?.action === "reject"}
+              onClick={() => {
+                setRejectTarget(null);
+                setRejectReason("");
+              }}
+            >
+              Hủy
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={actionLoading?.action === "reject" || rejectReason.trim().length < 2}
+              onClick={() => void submitReject()}
+            >
+              {actionLoading?.action === "reject" ? "Đang từ chối..." : "Xác nhận từ chối"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

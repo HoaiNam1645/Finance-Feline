@@ -1,6 +1,6 @@
 import { DeleteObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 
-const MAX_RECEIPT_FILES_PER_REQUEST = 10;
+const MAX_RECEIPT_FILES_PER_REQUEST = 30;
 const MAX_RECEIPT_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
 
 export function mapReceiptStorageError(error: unknown) {
