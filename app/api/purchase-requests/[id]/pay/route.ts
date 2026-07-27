@@ -79,6 +79,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     return fail("Request không tồn tại", 404);
   }
 
+  const isCollection = purchaseRequest.kind === "COLLECTION";
+  const categoryType = isCollection ? "INCOME" : "EXPENSE";
+
   let category = null;
   if (purchaseRequest.categoryId) {
     category = await prisma.transactionCategory.findFirst({
@@ -91,17 +94,22 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   if (!category) {
     category =
+      (!isCollection
+        ? await prisma.transactionCategory.findFirst({
+            where: { code: "ORDER_COST", isActive: true, type: "EXPENSE" },
+          })
+        : null) ??
       (await prisma.transactionCategory.findFirst({
-        where: { code: "ORDER_COST", isActive: true, type: "EXPENSE" },
-      })) ??
-      (await prisma.transactionCategory.findFirst({
-        where: { isActive: true, type: "EXPENSE" },
+        where: { isActive: true, type: categoryType },
         orderBy: { createdAt: "asc" },
       }));
   }
 
   if (!category) {
-    return fail("Không tìm thấy danh mục chi phí hợp lệ để thanh toán", 500);
+    return fail(
+      isCollection ? "Không tìm thấy danh mục thu hợp lệ" : "Không tìm thấy danh mục chi phí hợp lệ để thanh toán",
+      500
+    );
   }
 
   if (paymentCategoryId) {
@@ -109,11 +117,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       where: {
         id: paymentCategoryId,
         isActive: true,
-        type: "EXPENSE",
+        type: categoryType,
       },
     });
     if (!selectedCategory) {
-      return fail("Danh mục thanh toán không hợp lệ", 400);
+      return fail("Danh mục không hợp lệ", 400);
     }
     category = selectedCategory;
   }
@@ -168,7 +176,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
       const transaction = await tx.transaction.create({
         data: {
-          direction: "OUT",
+          direction: isCollection ? "IN" : "OUT",
           teamUsers: { create: { userId: purchaseRequest.requesterId } },
           categoryId: category.id,
           amountOriginal,
@@ -176,7 +184,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           exchangeRateToVnd: fx,
           amountVnd,
           description: [
-            `Thanh toán cho yêu cầu mua: ${purchaseRequest.title}`,
+            isCollection
+              ? `Thu tiền cho yêu cầu thu: ${purchaseRequest.title}`
+              : `Thanh toán cho yêu cầu mua: ${purchaseRequest.title}`,
             `Số tiền yêu cầu: ${Number(purchaseRequest.expectedAmount).toLocaleString("vi-VN")} ${purchaseRequest.currencyCode}`,
             ...(paymentNote.trim() ? [`Ghi chú người thanh toán: ${paymentNote.trim()}`] : []),
           ].join("\n"),

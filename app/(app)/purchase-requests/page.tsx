@@ -53,6 +53,7 @@ type PurchaseRequestRow = {
   expectedAmount: string;
   currencyCode: "VND" | "USD";
   status: string;
+  kind: "PURCHASE" | "COLLECTION";
   requester: { id: string; fullName: string; email: string };
   items: PurchaseRequestItem[];
 };
@@ -290,16 +291,19 @@ export default function PurchaseRequestsPage() {
   const [draftRequesterId, setDraftRequesterId] = useState("__ALL__");
   const [draftCategoryFilterId, setDraftCategoryFilterId] = useState("__ALL__");
   const [draftStatusFilter, setDraftStatusFilter] = useState<PurchaseRequestStatusFilter>("__ALL__");
+  const [draftKindFilter, setDraftKindFilter] = useState<"__ALL__" | "PURCHASE" | "COLLECTION">("__ALL__");
   const [appliedDateRange, setAppliedDateRange] = useState<DateRange | undefined>();
   const [appliedSearch, setAppliedSearch] = useState("");
   const [appliedRequesterId, setAppliedRequesterId] = useState("__ALL__");
   const [appliedCategoryFilterId, setAppliedCategoryFilterId] = useState("__ALL__");
   const [appliedStatusFilter, setAppliedStatusFilter] = useState<PurchaseRequestStatusFilter>("__ALL__");
+  const [appliedKindFilter, setAppliedKindFilter] = useState<"__ALL__" | "PURCHASE" | "COLLECTION">("__ALL__");
   const [timelineRow, setTimelineRow] = useState<PurchaseRequestRow | null>(null);
   const [timelineRows, setTimelineRows] = useState<TimelineLog[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
   const [timelineCache, setTimelineCache] = useState<Record<string, TimelineLog[]>>({});
   const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [createKind, setCreateKind] = useState<"PURCHASE" | "COLLECTION">("PURCHASE");
   const [creatingRequest, setCreatingRequest] = useState(false);
   const [createRequestReceiptFiles, setCreateRequestReceiptFiles] = useState<File[]>([]);
   const [actionLoading, setActionLoading] = useState<{
@@ -350,6 +354,9 @@ export default function PurchaseRequestsPage() {
       if (appliedStatusFilter !== "__ALL__" && row.status !== appliedStatusFilter) {
         return false;
       }
+      if (appliedKindFilter !== "__ALL__" && row.kind !== appliedKindFilter) {
+        return false;
+      }
       if (appliedSearch.trim()) {
         const textKeyword = appliedSearch.trim().toLowerCase();
         const byText =
@@ -374,7 +381,7 @@ export default function PurchaseRequestsPage() {
       }
       return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
     });
-  }, [rows, appliedDateRange, appliedSearch, appliedRequesterId, appliedCategoryFilterId, appliedStatusFilter]);
+  }, [rows, appliedDateRange, appliedSearch, appliedRequesterId, appliedCategoryFilterId, appliedStatusFilter, appliedKindFilter]);
 
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
   const safeCurrentPage = Math.min(currentPage, totalPages);
@@ -387,11 +394,14 @@ export default function PurchaseRequestsPage() {
     return filteredRows.slice(start, start + pageSize);
   }, [filteredRows, safeCurrentPage]);
   const selectedCreateCategory = filteredCategories.find((category) => category.id === categoryId) ?? null;
-  const paymentExpenseCategories = useMemo(
-    () => categories.filter((category) => category.type === "EXPENSE"),
-    [categories]
+  const paymentCategoryOptions = useMemo(
+    () =>
+      categories.filter(
+        (category) => category.type === (confirmingRow?.kind === "COLLECTION" ? "INCOME" : "EXPENSE")
+      ),
+    [categories, confirmingRow]
   );
-  const selectedPaymentCategory = paymentExpenseCategories.find((category) => category.id === paymentCategoryId) ?? null;
+  const selectedPaymentCategory = paymentCategoryOptions.find((category) => category.id === paymentCategoryId) ?? null;
   const canDeletePurchaseRequest = currentUserEmail === SPECIAL_DELETE_EMAIL;
   const canSelectRequester = roles.includes("ACCOUNTANT");
   const categoryGroups = useMemo(() => {
@@ -442,6 +452,7 @@ export default function PurchaseRequestsPage() {
     setAppliedRequesterId(draftRequesterId);
     setAppliedCategoryFilterId(draftCategoryFilterId);
     setAppliedStatusFilter(draftStatusFilter);
+    setAppliedKindFilter(draftKindFilter);
     setCurrentPage(1);
   }
 
@@ -451,12 +462,21 @@ export default function PurchaseRequestsPage() {
     setDraftRequesterId("__ALL__");
     setDraftCategoryFilterId("__ALL__");
     setDraftStatusFilter("__ALL__");
+    setDraftKindFilter("__ALL__");
     setAppliedDateRange(undefined);
     setAppliedSearch("");
     setAppliedRequesterId("__ALL__");
     setAppliedCategoryFilterId("__ALL__");
     setAppliedStatusFilter("__ALL__");
+    setAppliedKindFilter("__ALL__");
     setCurrentPage(1);
+  }
+
+  function openCreateModal(kind: "PURCHASE" | "COLLECTION") {
+    setCreateKind(kind);
+    setCategoryType(kind === "COLLECTION" ? "INCOME" : "EXPENSE");
+    setCategoryId("");
+    setCreateModalOpen(true);
   }
 
   async function loadRows() {
@@ -586,6 +606,7 @@ export default function PurchaseRequestsPage() {
     setCreatingRequest(true);
     try {
       const formData = new FormData();
+      formData.set("kind", createKind);
       formData.set("title", title.trim());
       formData.set("description", description.trim());
       formData.set("categoryId", categoryId);
@@ -860,10 +881,15 @@ export default function PurchaseRequestsPage() {
     <div className="space-y-6">
       <Card>
         <CardHeader className="flex flex-row items-center justify-between gap-3">
-          <CardTitle>Danh sách yêu cầu mua</CardTitle>
-          <Button size="sm" onClick={() => setCreateModalOpen(true)}>
-            Tạo yêu cầu mua
-          </Button>
+          <CardTitle>Danh sách yêu cầu</CardTitle>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" onClick={() => openCreateModal("COLLECTION")}>
+              Tạo yêu cầu thu
+            </Button>
+            <Button size="sm" onClick={() => openCreateModal("PURCHASE")}>
+              Tạo yêu cầu mua
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">
@@ -927,6 +953,22 @@ export default function PurchaseRequestsPage() {
                 </Select>
               </div>
               <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground">Loại yêu cầu</Label>
+                <Select
+                  value={draftKindFilter}
+                  onValueChange={(value) => setDraftKindFilter(value as "__ALL__" | "PURCHASE" | "COLLECTION")}
+                >
+                  <SelectTrigger className="w-[160px]">
+                    <SelectValue placeholder="Loại yêu cầu" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__ALL__">Tất cả loại</SelectItem>
+                    <SelectItem value="PURCHASE">Yêu cầu mua</SelectItem>
+                    <SelectItem value="COLLECTION">Yêu cầu thu</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
                 <Label className="text-xs text-muted-foreground">Trạng thái</Label>
                 <Select
                   value={draftStatusFilter}
@@ -961,7 +1003,8 @@ export default function PurchaseRequestsPage() {
                     !draftSearch.trim() &&
                     draftRequesterId === "__ALL__" &&
                     draftCategoryFilterId === "__ALL__" &&
-                    draftStatusFilter === "__ALL__"
+                    draftStatusFilter === "__ALL__" &&
+                    draftKindFilter === "__ALL__"
                   }
                 >
                   Xóa bộ lọc
@@ -1021,6 +1064,16 @@ export default function PurchaseRequestsPage() {
                         <p className="text-sm">{row.requester.email}</p>
                       </TableCell>
                       <TableCell className="align-top">
+                        <Badge
+                          variant="outline"
+                          className={
+                            row.kind === "COLLECTION"
+                              ? "mb-1 border-emerald-200 bg-emerald-100 text-emerald-700"
+                              : "mb-1 border-rose-200 bg-rose-100 text-rose-700"
+                          }
+                        >
+                          {row.kind === "COLLECTION" ? "Yêu cầu thu" : "Yêu cầu mua"}
+                        </Badge>
                         <p className="text-sm font-medium">{row.title}</p>
                         <p className="mt-1 text-sm whitespace-pre-line">{row.description}</p>
                       </TableCell>
@@ -1111,7 +1164,7 @@ export default function PurchaseRequestsPage() {
                                 void loadPaymentAccounts();
                               }}
                             >
-                              Xác nhận chuyển tiền
+                              {row.kind === "COLLECTION" ? "Xác nhận đã nhận tiền" : "Xác nhận chuyển tiền"}
                             </Button>
                           )}
                           <Button
@@ -1191,8 +1244,12 @@ export default function PurchaseRequestsPage() {
       <Dialog open={createModalOpen} onOpenChange={setCreateModalOpen}>
         <DialogContent className="sm:max-w-xl">
           <DialogHeader>
-            <DialogTitle>Tạo yêu cầu mua</DialogTitle>
-            <DialogDescription>Nhập thông tin yêu cầu mua, sau đó gửi tạo mới.</DialogDescription>
+            <DialogTitle>{createKind === "COLLECTION" ? "Tạo yêu cầu thu" : "Tạo yêu cầu mua"}</DialogTitle>
+            <DialogDescription>
+              {createKind === "COLLECTION"
+                ? "Nhập thông tin yêu cầu thu. Khi Admin xác nhận đã nhận tiền, sổ giao dịch sẽ ghi Thu."
+                : "Nhập thông tin yêu cầu mua, sau đó gửi tạo mới."}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             {canSelectRequester && (
@@ -1234,13 +1291,19 @@ export default function PurchaseRequestsPage() {
               </Tabs>
             </div>
             <div className="space-y-2">
-              <Label>Loại danh mục</Label>
-              <Tabs value={categoryType} onValueChange={(value) => setCategoryType(value as "EXPENSE" | "INCOME")}>
-                <TabsList className="grid w-full grid-cols-2">
-                  <TabsTrigger value="EXPENSE">Chi</TabsTrigger>
-                  <TabsTrigger value="INCOME">Thu</TabsTrigger>
-                </TabsList>
-              </Tabs>
+              <Label>Loại yêu cầu</Label>
+              <div>
+                <Badge
+                  variant="outline"
+                  className={
+                    createKind === "COLLECTION"
+                      ? "border-emerald-200 bg-emerald-100 text-emerald-700"
+                      : "border-rose-200 bg-rose-100 text-rose-700"
+                  }
+                >
+                  {createKind === "COLLECTION" ? "Yêu cầu thu — chọn danh mục Thu" : "Yêu cầu mua — chọn danh mục Chi"}
+                </Badge>
+              </div>
             </div>
             <div className="space-y-2">
               <Label>Danh mục</Label>
@@ -1404,7 +1467,9 @@ export default function PurchaseRequestsPage() {
       >
         <DialogContent className="sm:max-w-xl">
           <DialogHeader>
-            <DialogTitle>Xác nhận chuyển tiền</DialogTitle>
+            <DialogTitle>
+              {confirmingRow?.kind === "COLLECTION" ? "Xác nhận đã nhận tiền" : "Xác nhận chuyển tiền"}
+            </DialogTitle>
             <DialogDescription>
               Người xác nhận kiểm tra lại thông tin, thêm ghi chú và tải ảnh chứng từ trước khi xác nhận.
             </DialogDescription>
@@ -1420,7 +1485,7 @@ export default function PurchaseRequestsPage() {
               </div>
 
               <div className="space-y-2">
-                <Label>Danh mục thanh toán</Label>
+                <Label>{confirmingRow.kind === "COLLECTION" ? "Danh mục thu" : "Danh mục thanh toán"}</Label>
                 <Select
                   value={paymentCategoryId || "__NONE__"}
                   onValueChange={(value) => setPaymentCategoryId(value === "__NONE__" ? "" : value)}
@@ -1430,7 +1495,7 @@ export default function PurchaseRequestsPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="__NONE__">Giữ danh mục hiện tại</SelectItem>
-                    {paymentExpenseCategories.map((category) => (
+                    {paymentCategoryOptions.map((category) => (
                       <SelectItem key={category.id} value={category.id}>
                         {categoryDisplayName(category)}
                       </SelectItem>
@@ -1536,7 +1601,11 @@ export default function PurchaseRequestsPage() {
                 if (confirmingRow) void confirmTransfer(confirmingRow.id);
               }}
             >
-              {confirming ? "Đang xác nhận..." : "Xác nhận chuyển tiền"}
+              {confirming
+                ? "Đang xác nhận..."
+                : confirmingRow?.kind === "COLLECTION"
+                  ? "Xác nhận đã nhận tiền"
+                  : "Xác nhận chuyển tiền"}
             </Button>
           </DialogFooter>
         </DialogContent>

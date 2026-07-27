@@ -17,6 +17,7 @@ function normalizeReceiptPath(filePath: string) {
 
 const createSchema = z.object({
   requesterId: z.preprocess((value) => (value === "" || value == null ? undefined : value), z.string().min(1).optional()),
+  kind: z.enum(["PURCHASE", "COLLECTION"]).optional().default("PURCHASE"),
   title: z.string().min(3),
   description: z.string().min(3),
   categoryId: z.string().min(1),
@@ -55,6 +56,7 @@ async function parseCreateInput(
 
     const parsed = createSchema.safeParse({
       requesterId: formData.get("requesterId"),
+      kind: formData.get("kind") ? String(formData.get("kind")) : undefined,
       title: String(formData.get("title") ?? ""),
       description: String(formData.get("description") ?? ""),
       categoryId: String(formData.get("categoryId") ?? ""),
@@ -154,6 +156,14 @@ export async function POST(request: Request) {
     return fail("Danh mục không hợp lệ", 400);
   }
 
+  const expectedCategoryType = payload.kind === "COLLECTION" ? "INCOME" : "EXPENSE";
+  if (category.type !== expectedCategoryType) {
+    return fail(
+      payload.kind === "COLLECTION" ? "Yêu cầu thu phải chọn danh mục Thu" : "Yêu cầu mua phải chọn danh mục Chi",
+      400
+    );
+  }
+
   const canAssignRequester = auth.user.roles.includes("ACCOUNTANT");
   if (payload.requesterId && !canAssignRequester) {
     return fail("Bạn không có quyền chọn nhân viên", 403);
@@ -210,6 +220,7 @@ export async function POST(request: Request) {
     const created = await tx.purchaseRequest.create({
       data: {
         requesterId,
+        kind: payload.kind,
         categoryId: payload.categoryId,
         title: payload.title,
         description: payload.description,

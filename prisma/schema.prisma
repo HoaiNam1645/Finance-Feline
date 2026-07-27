@@ -42,6 +42,11 @@ enum TransactionAdjustmentStatus {
   REJECTED
 }
 
+enum PurchaseRequestKind {
+  PURCHASE
+  COLLECTION
+}
+
 model User {
   id               String                @id @default(cuid())
   email            String                @unique
@@ -170,6 +175,7 @@ model PurchaseRequest {
   categoryId     String?                 @map("category_id")
   title          String
   description    String
+  kind           PurchaseRequestKind     @default(PURCHASE)
   expectedAmount Decimal                 @db.Decimal(20, 4) @map("expected_amount")
   currencyCode   String                  @map("currency_code")
   status         PurchaseRequestStatus   @default(DRAFT)
@@ -185,6 +191,7 @@ model PurchaseRequest {
 
   @@index([requesterId, status])
   @@index([categoryId])
+  @@index([kind, status])
   @@map("purchase_requests")
 }
 
