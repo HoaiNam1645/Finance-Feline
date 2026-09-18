@@ -297,8 +297,8 @@ model ReceiptImage {
   purchaseRequestId String?         @map("purchase_request_id")
   transactionId     String?         @map("transaction_id")
   uploadedBy        String          @map("uploaded_by")
-  filePath          String          @map("file_path")
-  fileName          String          @map("file_name")
+  filePath          String          @map("file_path") @db.VarChar(512)
+  fileName          String          @map("file_name") @db.VarChar(255)
   mimeType          String          @map("mime_type")
   size              Int
   createdAt         DateTime        @default(now()) @map("created_at")
