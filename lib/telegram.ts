@@ -22,12 +22,23 @@ type TelegramCallbackQuery = {
   };
 };
 
+type TelegramMessage = {
+  message_id?: number;
+  text?: string;
+  chat?: { id?: number | string };
+  reply_to_message?: {
+    text?: string;
+  };
+};
+
 type TelegramUpdate = {
   update_id?: number;
   callback_query?: TelegramCallbackQuery;
+  message?: TelegramMessage;
 };
 
 const TELEGRAM_MEDIA_GROUP_LIMIT = 10;
+const REJECT_REASON_MAX_LENGTH = 500;
 
 function telegramEnabled() {
   return Boolean(env.telegramBotToken && env.telegramChatId);
@@ -76,7 +87,7 @@ async function getTelegramUpdates(offset: number | null) {
   const data = await telegramApi("getUpdates", {
     ...(offset == null ? {} : { offset }),
     timeout: 20,
-    allowed_updates: ["callback_query"],
+    allowed_updates: ["callback_query", "message"],
   });
   if (!data || typeof data !== "object" || !("ok" in data) || data.ok !== true || !Array.isArray(data.result)) {
     return [];
@@ -279,16 +290,21 @@ async function sendCallbackMessage(callback: TelegramCallbackQuery, text: string
   });
 }
 
-async function updateCallbackMessage(callback: TelegramCallbackQuery, requestId: string, statusLine: string) {
-  const chatId = callback.message?.chat?.id;
-  const messageId = callback.message?.message_id;
-  if (!chatId || !messageId) return;
+async function updateTelegramMessage(input: {
+  chatId?: number | string;
+  messageId?: number;
+  requestId: string;
+  statusLine: string;
+  hasMedia?: boolean;
+}) {
+  const { chatId, messageId, requestId, statusLine, hasMedia } = input;
+  if (!chatId || !messageId) return false;
 
   const request = await getRequestForTelegram(requestId);
   const text = request
     ? `${buildRequestMessage(request)}\n\n${statusLine}`
     : statusLine;
-  if (callback.message?.caption || callback.message?.photo?.length) {
+  if (hasMedia) {
     const captionResult = await telegramApi("editMessageCaption", {
       chat_id: chatId,
       message_id: messageId,
@@ -296,7 +312,7 @@ async function updateCallbackMessage(callback: TelegramCallbackQuery, requestId:
       parse_mode: "HTML",
       reply_markup: { inline_keyboard: [] },
     });
-    if (captionResult) return;
+    if (captionResult) return true;
   }
 
   const editResult = await telegramApi("editMessageText", {
@@ -307,14 +323,136 @@ async function updateCallbackMessage(callback: TelegramCallbackQuery, requestId:
     disable_web_page_preview: true,
     reply_markup: { inline_keyboard: [] },
   });
-  if (editResult) return;
+  if (editResult) return true;
 
   await telegramApi("editMessageReplyMarkup", {
     chat_id: chatId,
     message_id: messageId,
     reply_markup: { inline_keyboard: [] },
   });
-  await sendCallbackMessage(callback, statusLine);
+  return false;
+}
+
+async function updateCallbackMessage(callback: TelegramCallbackQuery, requestId: string, statusLine: string) {
+  const chatId = callback.message?.chat?.id;
+  const messageId = callback.message?.message_id;
+  const hasMedia = Boolean(callback.message?.caption || callback.message?.photo?.length);
+  const updated = await updateTelegramMessage({ chatId, messageId, requestId, statusLine, hasMedia });
+  if (!updated) {
+    await sendCallbackMessage(callback, statusLine);
+  }
+}
+
+function rejectPromptMarker(requestId: string, messageId: number, hasMedia: boolean) {
+  return `reject:${requestId}:${messageId}:${hasMedia ? "photo" : "text"}`;
+}
+
+function parseRejectPromptMarker(message?: string) {
+  const match = message?.match(/reject:([a-z0-9]+):(\d+):(photo|text)/i);
+  if (!match) return null;
+  return {
+    requestId: match[1],
+    messageId: Number(match[2]),
+    hasMedia: match[3] === "photo",
+  };
+}
+
+async function requestRejectReason(callback: TelegramCallbackQuery, requestId: string) {
+  const chatId = callback.message?.chat?.id;
+  const messageId = callback.message?.message_id;
+  if (!chatId || !messageId) {
+    await sendCallbackMessage(callback, "⚠️ Không xác định được tin nhắn cần từ chối.");
+    return;
+  }
+
+  const hasMedia = Boolean(callback.message?.caption || callback.message?.photo?.length);
+  await telegramApi("sendMessage", {
+    chat_id: chatId,
+    text: [
+      "📝 <b>Nhập lý do từ chối</b>",
+      "Reply tin này với lý do để hoàn tất từ chối yêu cầu.",
+      "",
+      `<code>${rejectPromptMarker(requestId, messageId, hasMedia)}</code>`,
+    ].join("\n"),
+    parse_mode: "HTML",
+    reply_to_message_id: messageId,
+    allow_sending_without_reply: true,
+    reply_markup: {
+      force_reply: true,
+      selective: true,
+      input_field_placeholder: "Ví dụ: Vượt ngân sách, thiếu báo giá...",
+    },
+  });
+}
+
+async function handleRejectReasonMessage(message: TelegramMessage) {
+  const marker = parseRejectPromptMarker(message.reply_to_message?.text);
+  if (!marker) {
+    return { handled: false };
+  }
+
+  const reason = (message.text ?? "").trim();
+  if (!reason) {
+    await telegramApi("sendMessage", {
+      chat_id: message.chat?.id,
+      text: "⚠️ Lý do từ chối không được để trống. Vui lòng reply lại bằng lý do cụ thể.",
+      reply_to_message_id: message.message_id,
+    });
+    return { handled: true, ok: false };
+  }
+
+  const actor = await getTelegramApprovalActor();
+  if (!actor) {
+    await telegramApi("sendMessage", {
+      chat_id: message.chat?.id,
+      text: "⚠️ Chưa cấu hình người duyệt Telegram.",
+      reply_to_message_id: message.message_id,
+    });
+    return { handled: true, ok: false };
+  }
+
+  const note = reason.slice(0, REJECT_REASON_MAX_LENGTH);
+  try {
+    await rejectPurchaseRequest({
+      id: marker.requestId,
+      actor,
+      note,
+      auditAction: "purchase_request.telegram_reject",
+    });
+    await updateTelegramMessage({
+      chatId: message.chat?.id,
+      messageId: marker.messageId,
+      requestId: marker.requestId,
+      statusLine: `❌ <b>Đã từ chối</b> bởi ${escapeHtml(actor.fullName)}\n📝 <b>Lý do:</b> ${escapeHtml(note)}`,
+      hasMedia: marker.hasMedia,
+    });
+    await telegramApi("sendMessage", {
+      chat_id: message.chat?.id,
+      text: "✅ Đã ghi nhận lý do từ chối.",
+      reply_to_message_id: message.message_id,
+    });
+    return { handled: true, ok: true };
+  } catch (error) {
+    const errorMessage = error instanceof PurchaseRequestActionError ? error.message : "Xử lý thất bại";
+    const request = await getRequestForTelegram(marker.requestId);
+    if (request && request.status !== "PENDING_APPROVAL") {
+      await updateTelegramMessage({
+        chatId: message.chat?.id,
+        messageId: marker.messageId,
+        requestId: marker.requestId,
+        statusLine: `ℹ️ <b>Yêu cầu đã được xử lý trước đó</b> (${escapeHtml(request.status)})`,
+        hasMedia: marker.hasMedia,
+      });
+    } else {
+      await telegramApi("sendMessage", {
+        chat_id: message.chat?.id,
+        text: `⚠️ ${escapeHtml(errorMessage)}`,
+        parse_mode: "HTML",
+        reply_to_message_id: message.message_id,
+      });
+    }
+    return { handled: true, ok: false, error: errorMessage };
+  }
 }
 
 export async function getTelegramApprovalActor(): Promise<SessionUser | null> {
@@ -352,6 +490,10 @@ export async function getTelegramApprovalActor(): Promise<SessionUser | null> {
 }
 
 export async function handleTelegramUpdate(update: TelegramUpdate) {
+  if (update.message) {
+    return handleRejectReasonMessage(update.message);
+  }
+
   const callback = update.callback_query;
   if (!callback?.id || !callback.data) {
     return { handled: false };
@@ -384,14 +526,8 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
       return { handled: true, ok: true };
     }
 
-    await rejectPurchaseRequest({
-      id: requestId,
-      actor,
-      note: "Từ chối từ Telegram",
-      auditAction: "purchase_request.telegram_reject",
-    });
-    await updateCallbackMessage(callback, requestId, `❌ <b>Đã từ chối</b> bởi ${escapeHtml(actor.fullName)}`);
-    return { handled: true, ok: true };
+    await requestRejectReason(callback, requestId);
+    return { handled: true, ok: true, pendingReason: true };
   } catch (error) {
     const message = error instanceof PurchaseRequestActionError ? error.message : "Xử lý thất bại";
     const request = await getRequestForTelegram(requestId);
