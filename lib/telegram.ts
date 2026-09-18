@@ -17,6 +17,8 @@ type TelegramCallbackQuery = {
   message?: {
     chat?: { id?: number | string };
     message_id?: number;
+    caption?: string;
+    photo?: unknown[];
   };
 };
 
@@ -171,29 +173,33 @@ function receiptCaption(
   return `🧾 <b>Chứng từ</b> <code>#${escapeHtml(request.id.slice(-6).toUpperCase())}</code> (${range})`;
 }
 
-async function sendSingleReceiptImage(
+async function sendReceiptImage(
   request: NonNullable<Awaited<ReturnType<typeof getRequestForTelegram>>>,
   image: { fileName: string; filePath: string },
-  index: number
+  index: number,
+  caption?: string,
+  replyMarkup?: TelegramInlineKeyboard
 ) {
   return telegramApi("sendPhoto", {
     chat_id: env.telegramChatId,
     photo: absoluteReceiptUrl(image.filePath),
-    caption: `${receiptCaption(request, index, 1)}\n${escapeHtml(image.fileName)}`,
+    caption: caption ?? `${receiptCaption(request, index, 1)}\n${escapeHtml(image.fileName)}`,
     parse_mode: "HTML",
+    ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
   });
 }
 
-async function sendReceiptImages(request: NonNullable<Awaited<ReturnType<typeof getRequestForTelegram>>>) {
-  if (request.receiptImages.length === 0) return;
-
-  if (request.receiptImages.length === 1) {
-    await sendSingleReceiptImage(request, request.receiptImages[0], 1);
-    return;
-  }
-
-  for (let index = 0; index < request.receiptImages.length; index += TELEGRAM_MEDIA_GROUP_LIMIT) {
+async function sendExtraReceiptImages(
+  request: NonNullable<Awaited<ReturnType<typeof getRequestForTelegram>>>,
+  startIndex: number
+) {
+  for (let index = startIndex; index < request.receiptImages.length; index += TELEGRAM_MEDIA_GROUP_LIMIT) {
     const batch = request.receiptImages.slice(index, index + TELEGRAM_MEDIA_GROUP_LIMIT);
+    if (batch.length === 1) {
+      await sendReceiptImage(request, batch[0], index + 1);
+      continue;
+    }
+
     const result = await telegramApi("sendMediaGroup", {
       chat_id: env.telegramChatId,
       media: batch.map((image, batchIndex) => ({
@@ -210,7 +216,7 @@ async function sendReceiptImages(request: NonNullable<Awaited<ReturnType<typeof 
 
     if (!result) {
       for (let batchIndex = 0; batchIndex < batch.length; batchIndex += 1) {
-        await sendSingleReceiptImage(request, batch[batchIndex], index + batchIndex + 1);
+        await sendReceiptImage(request, batch[batchIndex], index + batchIndex + 1);
       }
     }
   }
@@ -225,9 +231,25 @@ export async function notifyPurchaseRequestSubmitted(requestId: string) {
   const request = await getRequestForTelegram(requestId);
   if (!request) return;
 
-  await sendReceiptImages(request).catch((error) => {
-    console.error("[telegram] receipt images notification failed", error);
-  });
+  if (request.receiptImages.length > 0) {
+    const sent = await sendReceiptImage(
+      request,
+      request.receiptImages[0],
+      1,
+      buildRequestMessage(request),
+      buildApprovalKeyboard(request.id)
+    ).catch((error) => {
+      console.error("[telegram] primary receipt notification failed", error);
+      return null;
+    });
+
+    if (sent) {
+      await sendExtraReceiptImages(request, 1).catch((error) => {
+        console.error("[telegram] extra receipt images notification failed", error);
+      });
+      return;
+    }
+  }
 
   await telegramApi("sendMessage", {
     chat_id: env.telegramChatId,
@@ -266,6 +288,17 @@ async function updateCallbackMessage(callback: TelegramCallbackQuery, requestId:
   const text = request
     ? `${buildRequestMessage(request)}\n\n${statusLine}`
     : statusLine;
+  if (callback.message?.caption || callback.message?.photo?.length) {
+    const captionResult = await telegramApi("editMessageCaption", {
+      chat_id: chatId,
+      message_id: messageId,
+      caption: text,
+      parse_mode: "HTML",
+      reply_markup: { inline_keyboard: [] },
+    });
+    if (captionResult) return;
+  }
+
   const editResult = await telegramApi("editMessageText", {
     chat_id: chatId,
     message_id: messageId,
