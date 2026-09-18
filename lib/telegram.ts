@@ -246,21 +246,42 @@ async function answerCallbackQuery(callbackQueryId: string, text: string, showAl
   });
 }
 
-async function editCallbackMessage(callback: TelegramCallbackQuery, text: string) {
+async function sendCallbackMessage(callback: TelegramCallbackQuery, text: string) {
+  const chatId = callback.message?.chat?.id;
+  if (!chatId) return;
+
+  await telegramApi("sendMessage", {
+    chat_id: chatId,
+    text,
+    parse_mode: "HTML",
+  });
+}
+
+async function updateCallbackMessage(callback: TelegramCallbackQuery, requestId: string, statusLine: string) {
   const chatId = callback.message?.chat?.id;
   const messageId = callback.message?.message_id;
   if (!chatId || !messageId) return;
+
+  const request = await getRequestForTelegram(requestId);
+  const text = request
+    ? `${buildRequestMessage(request)}\n\n${statusLine}`
+    : statusLine;
+  const editResult = await telegramApi("editMessageText", {
+    chat_id: chatId,
+    message_id: messageId,
+    text,
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+    reply_markup: { inline_keyboard: [] },
+  });
+  if (editResult) return;
 
   await telegramApi("editMessageReplyMarkup", {
     chat_id: chatId,
     message_id: messageId,
     reply_markup: { inline_keyboard: [] },
   });
-  await telegramApi("sendMessage", {
-    chat_id: chatId,
-    text,
-    parse_mode: "HTML",
-  });
+  await sendCallbackMessage(callback, statusLine);
 }
 
 export async function getTelegramApprovalActor(): Promise<SessionUser | null> {
@@ -317,6 +338,8 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
   }
 
   try {
+    await answerCallbackQuery(callback.id, "Đang xử lý...");
+
     if (action === "approve") {
       await approvePurchaseRequest({
         id: requestId,
@@ -324,8 +347,7 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
         note: "Đồng ý duyệt từ Telegram",
         auditAction: "purchase_request.telegram_approve",
       });
-      await answerCallbackQuery(callback.id, "Đã duyệt");
-      await editCallbackMessage(callback, `✅ <b>Đã duyệt</b> yêu cầu <code>#${escapeHtml(requestId.slice(-6).toUpperCase())}</code> bởi ${escapeHtml(actor.fullName)}`);
+      await updateCallbackMessage(callback, requestId, `✅ <b>Đã duyệt</b> bởi ${escapeHtml(actor.fullName)}`);
       return { handled: true, ok: true };
     }
 
@@ -335,12 +357,20 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
       note: "Từ chối từ Telegram",
       auditAction: "purchase_request.telegram_reject",
     });
-    await answerCallbackQuery(callback.id, "Đã từ chối");
-    await editCallbackMessage(callback, `❌ <b>Đã từ chối</b> yêu cầu <code>#${escapeHtml(requestId.slice(-6).toUpperCase())}</code> bởi ${escapeHtml(actor.fullName)}`);
+    await updateCallbackMessage(callback, requestId, `❌ <b>Đã từ chối</b> bởi ${escapeHtml(actor.fullName)}`);
     return { handled: true, ok: true };
   } catch (error) {
     const message = error instanceof PurchaseRequestActionError ? error.message : "Xử lý thất bại";
-    await answerCallbackQuery(callback.id, message, true);
+    const request = await getRequestForTelegram(requestId);
+    if (request && request.status !== "PENDING_APPROVAL") {
+      await updateCallbackMessage(
+        callback,
+        requestId,
+        `ℹ️ <b>Yêu cầu đã được xử lý trước đó</b> (${escapeHtml(request.status)})`
+      );
+    } else {
+      await sendCallbackMessage(callback, `⚠️ <b>${escapeHtml(message)}</b>`);
+    }
     return { handled: true, ok: false, error: message };
   }
 }
