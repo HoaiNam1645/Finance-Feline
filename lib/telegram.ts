@@ -35,6 +35,7 @@ type TelegramUpdate = {
   update_id?: number;
   callback_query?: TelegramCallbackQuery;
   message?: TelegramMessage;
+  channel_post?: TelegramMessage;
 };
 
 const TELEGRAM_MEDIA_GROUP_LIMIT = 10;
@@ -87,7 +88,7 @@ async function getTelegramUpdates(offset: number | null) {
   const data = await telegramApi("getUpdates", {
     ...(offset == null ? {} : { offset }),
     timeout: 20,
-    allowed_updates: ["callback_query", "message"],
+    allowed_updates: ["callback_query", "message", "channel_post"],
   });
   if (!data || typeof data !== "object" || !("ok" in data) || data.ok !== true || !Array.isArray(data.result)) {
     return [];
@@ -489,8 +490,9 @@ export async function getTelegramApprovalActor(): Promise<SessionUser | null> {
 }
 
 export async function handleTelegramUpdate(update: TelegramUpdate) {
-  if (update.message) {
-    return handleRejectReasonMessage(update.message);
+  const textMessage = update.message ?? update.channel_post;
+  if (textMessage) {
+    return handleRejectReasonMessage(textMessage);
   }
 
   const callback = update.callback_query;
