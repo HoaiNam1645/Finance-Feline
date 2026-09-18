@@ -88,6 +88,16 @@ export function CategoriesManager() {
     };
   }, []);
 
+  useEffect(() => {
+    const reload = () => {
+      void loadRows();
+    };
+    window.addEventListener("category-migration-applied", reload);
+    return () => {
+      window.removeEventListener("category-migration-applied", reload);
+    };
+  }, [loadRows]);
+
   const parentOptions = rows
     .filter((row) => row.type === type && !row.parentId)
     .sort((a, b) => a.name.localeCompare(b.name, "vi"));

@@ -169,8 +169,66 @@ async function main() {
   for (const category of categories) {
     await prisma.transactionCategory.upsert({
       where: { code: category.code },
-      update: category,
+      update: {
+        ...category,
+        isActive: true,
+        parentId: null,
+      },
       create: category,
+    });
+  }
+
+  const targetExpenseCategories = [
+    { code: "EXPENSE_FIXED", name: "CHI PHÍ CỐ ĐỊNH" },
+    { code: "EXPENSE_OPERATION", name: "CHI PHÍ VẬN HÀNH" },
+    { code: "EXPENSE_EQUIPMENT", name: "CHI PHÍ THIẾT BỊ, VẬT PHẨM" },
+    { code: "EXPENSE_HR", name: "CHI PHÍ NHÂN SỰ" },
+    { code: "EXPENSE_ACCOUNT", name: "CHI PHÍ ACCOUNT" },
+    { code: "EXPENSE_ADS", name: "CHI PHÍ ADS" },
+    { code: "EXPENSE_OTHER", name: "CHI PHÍ KHÁC" },
+  ];
+
+  await prisma.appSetting.upsert({
+    where: { key: "CATEGORY_MIGRATION_COMPLETED" },
+    update: { value: "false" },
+    create: { key: "CATEGORY_MIGRATION_COMPLETED", value: "false" },
+  });
+
+  await prisma.transaction.deleteMany({
+    where: {
+      description: { startsWith: "[MAPPING_DEMO]" },
+    },
+  });
+  await prisma.transactionCategory.deleteMany({
+    where: {
+      code: {
+        startsWith: "OLD_DEMO_",
+      },
+    },
+  });
+  await prisma.transactionCategory.deleteMany({
+    where: {
+      code: {
+        startsWith: "NEW_DEMO_",
+      },
+    },
+  });
+
+  for (const category of targetExpenseCategories) {
+    await prisma.transactionCategory.upsert({
+      where: { code: category.code },
+      update: {
+        name: category.name,
+        type: TransactionType.EXPENSE,
+        parentId: null,
+        isActive: true,
+      },
+      create: {
+        code: category.code,
+        name: category.name,
+        type: TransactionType.EXPENSE,
+        accountantApprovalThresholdVnd: 5_000_000,
+      },
     });
   }
 
@@ -219,6 +277,8 @@ async function main() {
     },
   });
 
+  const now = new Date();
+
   const incomeCategories = await prisma.transactionCategory.findMany({
     where: {
       code: { in: ["SERVICE_INCOME", "PROJECT_INCOME", "OTHER_INCOME"] },
@@ -251,7 +311,6 @@ async function main() {
     approvedBy: string;
   }> = [];
 
-  const now = new Date();
   const baseExchange = 25_000;
 
   for (let monthOffset = 0; monthOffset < 12; monthOffset += 1) {
