@@ -25,6 +25,8 @@ type TelegramUpdate = {
   callback_query?: TelegramCallbackQuery;
 };
 
+const TELEGRAM_MEDIA_GROUP_LIMIT = 10;
+
 function telegramEnabled() {
   return Boolean(env.telegramBotToken && env.telegramChatId);
 }
@@ -144,6 +146,76 @@ function buildApprovalKeyboard(requestId: string): TelegramInlineKeyboard {
   };
 }
 
+function absoluteReceiptUrl(filePath: string) {
+  if (filePath.startsWith("http://") || filePath.startsWith("https://")) {
+    return filePath;
+  }
+
+  const appUrl = env.appUrl.replace(/\/$/, "");
+  if (filePath.startsWith("/")) {
+    return `${appUrl}${filePath}`;
+  }
+  if (filePath.startsWith("public/")) {
+    return `${appUrl}/${filePath.replace(/^public\/+/, "")}`;
+  }
+  return `${appUrl}/${filePath}`;
+}
+
+function receiptCaption(
+  request: NonNullable<Awaited<ReturnType<typeof getRequestForTelegram>>>,
+  start: number,
+  count: number
+) {
+  const end = start + count - 1;
+  const range = request.receiptImages.length === 1 ? "1/1" : `${start}-${end}/${request.receiptImages.length}`;
+  return `🧾 <b>Chứng từ</b> <code>#${escapeHtml(request.id.slice(-6).toUpperCase())}</code> (${range})`;
+}
+
+async function sendSingleReceiptImage(
+  request: NonNullable<Awaited<ReturnType<typeof getRequestForTelegram>>>,
+  image: { fileName: string; filePath: string },
+  index: number
+) {
+  return telegramApi("sendPhoto", {
+    chat_id: env.telegramChatId,
+    photo: absoluteReceiptUrl(image.filePath),
+    caption: `${receiptCaption(request, index, 1)}\n${escapeHtml(image.fileName)}`,
+    parse_mode: "HTML",
+  });
+}
+
+async function sendReceiptImages(request: NonNullable<Awaited<ReturnType<typeof getRequestForTelegram>>>) {
+  if (request.receiptImages.length === 0) return;
+
+  if (request.receiptImages.length === 1) {
+    await sendSingleReceiptImage(request, request.receiptImages[0], 1);
+    return;
+  }
+
+  for (let index = 0; index < request.receiptImages.length; index += TELEGRAM_MEDIA_GROUP_LIMIT) {
+    const batch = request.receiptImages.slice(index, index + TELEGRAM_MEDIA_GROUP_LIMIT);
+    const result = await telegramApi("sendMediaGroup", {
+      chat_id: env.telegramChatId,
+      media: batch.map((image, batchIndex) => ({
+        type: "photo",
+        media: absoluteReceiptUrl(image.filePath),
+        ...(batchIndex === 0
+          ? {
+              caption: receiptCaption(request, index + 1, batch.length),
+              parse_mode: "HTML",
+            }
+          : {}),
+      })),
+    });
+
+    if (!result) {
+      for (let batchIndex = 0; batchIndex < batch.length; batchIndex += 1) {
+        await sendSingleReceiptImage(request, batch[batchIndex], index + batchIndex + 1);
+      }
+    }
+  }
+}
+
 export async function notifyPurchaseRequestSubmitted(requestId: string) {
   if (!telegramEnabled()) {
     console.log("[telegram] skipped purchase request notification: missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID");
@@ -152,6 +224,10 @@ export async function notifyPurchaseRequestSubmitted(requestId: string) {
 
   const request = await getRequestForTelegram(requestId);
   if (!request) return;
+
+  await sendReceiptImages(request).catch((error) => {
+    console.error("[telegram] receipt images notification failed", error);
+  });
 
   await telegramApi("sendMessage", {
     chat_id: env.telegramChatId,
