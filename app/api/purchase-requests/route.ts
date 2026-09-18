@@ -4,6 +4,7 @@ import { writeAuditLog } from "@/lib/audit";
 import { fail, forbidden, ok, unauthorized } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { mapReceiptStorageError, saveReceiptFiles } from "@/lib/receipt-storage";
+import { notifyPurchaseRequestSubmitted } from "@/lib/telegram";
 
 type TxClient = Omit<typeof prisma, "$connect" | "$disconnect" | "$on" | "$transaction" | "$extends">;
 
@@ -269,6 +270,10 @@ export async function POST(request: Request) {
       ...row,
       receiptCount: savedFiles.length,
     },
+  });
+
+  await notifyPurchaseRequestSubmitted(row.id).catch((error) => {
+    console.error("[telegram] purchase request notification failed", error);
   });
 
   return ok({ row, receiptCount: savedFiles.length }, 201);

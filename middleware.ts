@@ -26,6 +26,10 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  if (pathname === "/api/telegram/webhook") {
+    return NextResponse.next();
+  }
+
   if (pathname.startsWith("/api") && !pathname.startsWith("/api/auth") && !hasSession) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
