@@ -366,23 +366,22 @@ async function requestRejectReason(callback: TelegramCallbackQuery, requestId: s
   }
 
   const hasMedia = Boolean(callback.message?.caption || callback.message?.photo?.length);
-  await telegramApi("sendMessage", {
+  const promptResult = await telegramApi("sendMessage", {
     chat_id: chatId,
     text: [
       "📝 <b>Nhập lý do từ chối</b>",
-      "Reply tin này với lý do để hoàn tất từ chối yêu cầu.",
+      "Hãy reply tin nhắn này với lý do để hoàn tất từ chối yêu cầu.",
       "",
       `<code>${rejectPromptMarker(requestId, messageId, hasMedia)}</code>`,
     ].join("\n"),
     parse_mode: "HTML",
     reply_to_message_id: messageId,
     allow_sending_without_reply: true,
-    reply_markup: {
-      force_reply: true,
-      selective: true,
-      input_field_placeholder: "Ví dụ: Vượt ngân sách, thiếu báo giá...",
-    },
   });
+
+  if (!promptResult) {
+    await sendCallbackMessage(callback, "⚠️ Không gửi được tin nhắn nhập lý do. Vui lòng thử lại.");
+  }
 }
 
 async function handleRejectReasonMessage(message: TelegramMessage) {
