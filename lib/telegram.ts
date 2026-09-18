@@ -118,22 +118,22 @@ function buildRequestMessage(request: NonNullable<Awaited<ReturnType<typeof getR
   const category = escapeHtml(categoryName(request));
   const receiptLine =
     request.receiptImages.length > 0
-      ? `\n🧾 <b>Chứng từ:</b> ${request.receiptImages.length} file`
+      ? `\n📎 <b>Chứng từ:</b> ${request.receiptImages.length} file`
       : "";
   const appLink = `${env.appUrl.replace(/\/$/, "")}/purchase-requests`;
 
   return [
-    `📣 <b>${kindLabel} mới</b> <code>#${request.id.slice(-6).toUpperCase()}</code>`,
-    "━━━━━━━━━━━━━━━━━━━━",
+    `🔔 <b>${kindLabel} mới</b> <code>#${request.id.slice(-6).toUpperCase()}</code>`,
+    "────────────────────",
     `👤 <b>Người tạo:</b> ${requester}`,
-    `🏷 <b>Danh mục:</b> ${category}`,
-    `💰 <b>Số tiền:</b> <code>${money(request.expectedAmount, request.currencyCode)}</code>`,
-    `🧾 <b>Tiêu đề:</b> ${title}`,
+    `🗂 <b>Danh mục:</b> ${category}`,
+    `💵 <b>Số tiền:</b> <code>${money(request.expectedAmount, request.currencyCode)}</code>`,
+    `✍️ <b>Tiêu đề:</b> ${title}`,
     `📝 <b>Mô tả:</b> ${description}`,
-    `📅 <b>Ngày tạo:</b> ${formatDate(request.createdAt)}${receiptLine}`,
-    "━━━━━━━━━━━━━━━━━━━━",
-    `⏳ <b>Trạng thái:</b> ${request.status}`,
-    `🔗 <a href="${escapeHtml(appLink)}">Mở trong hệ thống</a>`,
+    `🕒 <b>Ngày tạo:</b> ${formatDate(request.createdAt)}${receiptLine}`,
+    "────────────────────",
+    `🔄 <b>Trạng thái:</b> ${request.status}`,
+    `↗️ <a href="${escapeHtml(appLink)}">Mở trong hệ thống</a>`,
   ].join("\n");
 }
 
@@ -141,8 +141,8 @@ function buildApprovalKeyboard(requestId: string): TelegramInlineKeyboard {
   return {
     inline_keyboard: [
       [
-        { text: "✅ Approve", callback_data: `pr:approve:${requestId}` },
-        { text: "❌ Reject", callback_data: `pr:reject:${requestId}` },
+        { text: "🟢 Duyệt", callback_data: `pr:approve:${requestId}` },
+        { text: "🔴 Từ chối", callback_data: `pr:reject:${requestId}` },
       ],
     ],
   };
