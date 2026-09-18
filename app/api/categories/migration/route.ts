@@ -9,6 +9,7 @@ const COMPLETED_KEY = "CATEGORY_MIGRATION_COMPLETED";
 
 const TARGET_EXPENSE_CATEGORIES = [
   { code: "EXPENSE_FIXED", name: "CHI PHÍ CỐ ĐỊNH" },
+  { code: "EXPENSE_COMPANY", name: "CHI PHÍ CÔNG TY" },
   { code: "EXPENSE_OPERATION", name: "CHI PHÍ VẬN HÀNH" },
   { code: "EXPENSE_EQUIPMENT", name: "CHI PHÍ THIẾT BỊ, VẬT PHẨM" },
   { code: "EXPENSE_HR", name: "CHI PHÍ NHÂN SỰ" },
