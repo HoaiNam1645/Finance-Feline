@@ -26,6 +26,9 @@ const rolePermissions: Record<string, string[]> = {
     "category.manage",
   ],
   EMPLOYEE: ["request.create", "request.submit", "request.read.own", "transaction.read"],
+  WORKSHOP: ["request.create", "request.submit", "request.read.own", "transaction.read"],
+  ACCOUNT: ["request.create", "request.submit", "request.read.own", "transaction.read"],
+  DIEU_AM: ["request.read.all", "transaction.read"],
 };
 
 export function hasPermission(roles: string[], permission: string) {

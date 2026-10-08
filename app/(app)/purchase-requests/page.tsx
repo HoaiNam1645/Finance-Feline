@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
-import { CalendarIcon, ChevronRight, Clock3 } from "lucide-react";
+import { AlertCircle, BookOpen, CalendarIcon, Clock3, HelpCircle, RefreshCcw } from "lucide-react";
 import { type DateRange } from "react-day-picker";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -12,12 +12,20 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { CurrencyConversionDialog } from "@/components/app/currency-conversion-dialog";
 import { ReceiptImageUploader } from "@/components/app/receipt-image-uploader";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { snapshotFiles } from "@/lib/snapshot-file";
+import { TagInput } from "@/components/app/tag-input";
+import { usePurchaseRequestTour, type TourAudience } from "@/components/app/purchase-request-tour";
+import { CategoryPickerTree } from "@/components/app/category-picker-tree";
+import { buildCategoryTree, collectSelectableCategories } from "@/lib/category-tree";
+import { DIEU_AM_ROLE_CODE } from "@/lib/dieu-am-scope";
 
 type PurchaseRequestItem = {
   id: string;
@@ -47,13 +55,19 @@ type PurchaseRequestRow = {
     currencyCode: "VND" | "USD";
     description?: string;
     notes?: unknown;
+    transactionRef?: string | null;
     creator: { fullName: string };
   }>;
   receiptImages?: Array<{ id: string; filePath: string; fileName: string; createdAt: string }>;
   expectedAmount: string;
   currencyCode: "VND" | "USD";
+  tags?: string[];
+  workshopEmail?: string | null;
+  walletOwnerName?: string | null;
   status: string;
   kind: "PURCHASE" | "COLLECTION";
+  currencyConversionCount?: number;
+  currencyConversionStatus?: "PENDING" | "FAILED" | "SUCCEEDED" | null;
   requester: { id: string; fullName: string; email: string };
   items: PurchaseRequestItem[];
 };
@@ -70,9 +84,13 @@ type PurchaseRequestStatusFilter =
 type Category = {
   id: string;
   name: string;
+  note?: string | null;
+  contactEmail?: string | null;
   type: "INCOME" | "EXPENSE";
   parentId?: string | null;
   parentName?: string | null;
+  level?: number;
+  pathLabel?: string;
 };
 
 type PaymentAccount = {
@@ -103,12 +121,59 @@ type TimelineLog = {
   } | null;
 };
 
-function categoryDisplayName(category: Pick<Category, "name" | "parentName">) {
+function categoryDisplayName(category: Pick<Category, "name" | "parentName"> & { pathLabel?: string }) {
+  if (category.pathLabel) return category.pathLabel;
   return category.parentName ? `${category.parentName} / ${category.name}` : category.name;
 }
 
 const VN_DIGITS = ["không", "một", "hai", "ba", "bốn", "năm", "sáu", "bảy", "tám", "chín"];
 const SPECIAL_DELETE_EMAIL = "ngobao@bugmedia.vn";
+
+const DEMO_REQUESTER = { id: "demo-user", fullName: "Team HKT (mẫu)", email: "demo@company.local" };
+
+/** Phiếu mẫu chỉ hiện trong lúc chạy hướng dẫn, không đụng tới dữ liệu thật. */
+const TOUR_DEMO_ROWS: PurchaseRequestRow[] = [
+  {
+    id: "demo-pending",
+    createdAt: new Date().toISOString(),
+    title: "Gia hạn ChatGPT Plus (phiếu mẫu)",
+    description: "Tài khoản dothiymy@gmail.com",
+    category: { id: "demo-cat", name: "Feline / Chi phí vận hành / Phần mềm + tool + hệ thống", accountantApprovalThresholdVnd: 5_000_000 },
+    expectedAmount: "522500",
+    currencyCode: "VND",
+    status: "PENDING_APPROVAL",
+    kind: "PURCHASE",
+    requester: DEMO_REQUESTER,
+    items: [],
+  },
+  {
+    id: "demo-approved",
+    createdAt: new Date().toISOString(),
+    title: "Top up xưởng HGT (phiếu mẫu)",
+    description: "ff HGT - ngoxuantung26497@gmail.com",
+    category: { id: "demo-cat-2", name: "Feline / Xưởng / HGT", accountantApprovalThresholdVnd: 5_000_000 },
+    expectedAmount: "800",
+    currencyCode: "USD",
+    status: "APPROVED",
+    kind: "PURCHASE",
+    requester: DEMO_REQUESTER,
+    items: [],
+  },
+];
+
+/** Quy trình làm việc viết ngoài hệ thống, mở theo đúng vai trò của người đang xem. */
+const ROLE_DOC_LINKS: Partial<Record<TourAudience, { label: string; href: string; hint: string }>> = {
+  ACCOUNTANT: {
+    label: "Quy định kế toán",
+    href: "https://docs.google.com/document/d/1N0sieZ6U9OTwlAP39MY3B9GgrLKMPQo9w4h5b5xnY54/edit?usp=sharing",
+    hint: "Quy định khi làm việc với Kế Toán",
+  },
+  ACCOUNT: {
+    label: "Quy định Account",
+    href: "https://docs.google.com/document/d/1kGcMMApIK5wdjo6OyK34taro6r1s521RzqSu8mojpLI/edit?tab=t.0",
+    hint: "Quy định khi làm việc với team Account",
+  },
+};
 
 function readThreeDigits(num: number, isLeadingGroup: boolean) {
   const hundred = Math.floor(num / 100);
@@ -196,6 +261,19 @@ function statusUi(status: string) {
   return { label: "Nháp", className: "bg-slate-100 text-slate-700 border-slate-200" };
 }
 
+function currencyConversionStatusUi(status: PurchaseRequestRow["currencyConversionStatus"]) {
+  if (status === "SUCCEEDED") {
+    return { label: "Quy đổi: Thành công", className: "border-emerald-200 bg-emerald-100 text-emerald-700" };
+  }
+  if (status === "FAILED") {
+    return { label: "Quy đổi: Thất bại", className: "border-rose-200 bg-rose-100 text-rose-700" };
+  }
+  if (status === "PENDING") {
+    return { label: "Quy đổi: Đang chờ", className: "border-amber-200 bg-amber-100 text-amber-700" };
+  }
+  return null;
+}
+
 function mapActionLabel(action: string) {
   const labels: Record<string, string> = {
     "purchase_request.create": "Tạo yêu cầu mua",
@@ -223,9 +301,15 @@ function actionBadgeClass(action: string) {
 }
 
 function getTransferNote(
-  transaction: Pick<NonNullable<PurchaseRequestRow["transactions"]>[number], "notes" | "description"> | undefined
+  transaction:
+    | Pick<NonNullable<PurchaseRequestRow["transactions"]>[number], "notes" | "description" | "transactionRef">
+    | undefined
 ) {
   if (!transaction) return "";
+  // transactionRef is the column the transaction ledger edits, so it wins over the legacy note blob.
+  if (typeof transaction.transactionRef === "string" && transaction.transactionRef.trim()) {
+    return transaction.transactionRef.trim();
+  }
   if (transaction.notes && typeof transaction.notes === "object" && !Array.isArray(transaction.notes)) {
     const noteRecord = transaction.notes as Record<string, unknown>;
     const noteByPriority = [noteRecord.paymentTransferNote, noteRecord.paymentNote, noteRecord.transferNote].find(
@@ -260,6 +344,8 @@ export default function PurchaseRequestsPage() {
   const [teamUsers, setTeamUsers] = useState<TeamUser[]>([]);
   const [roles, setRoles] = useState<string[]>([]);
   const [currentUserEmail, setCurrentUserEmail] = useState("");
+  const [currentUserId, setCurrentUserId] = useState("");
+  const [tourDemoActive, setTourDemoActive] = useState(false);
   const [createRequesterId, setCreateRequesterId] = useState("");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -267,7 +353,6 @@ export default function PurchaseRequestsPage() {
   const [categoryType, setCategoryType] = useState<"EXPENSE" | "INCOME">("EXPENSE");
   const [categoryId, setCategoryId] = useState("");
   const [categoryPickerOpen, setCategoryPickerOpen] = useState(false);
-  const [expandedCategoryParents, setExpandedCategoryParents] = useState<string[]>([]);
   const [expectedAmountInput, setExpectedAmountInput] = useState("120");
   const [confirmingRow, setConfirmingRow] = useState<PurchaseRequestRow | null>(null);
   const [paymentAccounts, setPaymentAccounts] = useState<PaymentAccount[]>([]);
@@ -306,6 +391,11 @@ export default function PurchaseRequestsPage() {
   const [createKind, setCreateKind] = useState<"PURCHASE" | "COLLECTION">("PURCHASE");
   const [creatingRequest, setCreatingRequest] = useState(false);
   const [createRequestReceiptFiles, setCreateRequestReceiptFiles] = useState<File[]>([]);
+  const [createTags, setCreateTags] = useState<string[]>([]);
+  const [createWorkshopEmail, setCreateWorkshopEmail] = useState("");
+  const [accountOptions, setAccountOptions] = useState<TeamUser[]>([]);
+  const [createIsWalletStock, setCreateIsWalletStock] = useState(false);
+  const [createWalletOwnerId, setCreateWalletOwnerId] = useState("");
   const [actionLoading, setActionLoading] = useState<{
     id: string;
     action: "approve" | "reject";
@@ -314,6 +404,7 @@ export default function PurchaseRequestsPage() {
   const [deletingRequestId, setDeletingRequestId] = useState<string | null>(null);
   const [rejectTarget, setRejectTarget] = useState<{ id: string; title: string } | null>(null);
   const [rejectReason, setRejectReason] = useState("");
+  const [conversionModalOpen, setConversionModalOpen] = useState(false);
   const pageSize = 10;
   const expectedAmountValue = Number(expectedAmountInput);
   const amountInWords =
@@ -365,6 +456,7 @@ export default function PurchaseRequestsPage() {
           row.requester.fullName.toLowerCase().includes(textKeyword) ||
           row.requester.email.toLowerCase().includes(textKeyword) ||
           categoryDisplayName(row.category ?? { name: "", parentName: null }).toLowerCase().includes(textKeyword) ||
+          (row.tags ?? []).some((tag) => tag.toLowerCase().includes(textKeyword)) ||
           row.status.toLowerCase().includes(textKeyword);
         const keywordNumber = normalizeSearchNumber(appliedSearch);
         const amountString = Number(row.expectedAmount).toLocaleString("vi-VN");
@@ -385,54 +477,44 @@ export default function PurchaseRequestsPage() {
 
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
   const safeCurrentPage = Math.min(currentPage, totalPages);
-  const filteredCategories = useMemo(
-    () => categories.filter((category) => category.type === categoryType),
-    [categories, categoryType]
-  );
+  const categoryTree = useMemo(() => buildCategoryTree(categories, categoryType), [categories, categoryType]);
+  const filteredCategories = useMemo(() => collectSelectableCategories(categoryTree), [categoryTree]);
   const paginatedRows = useMemo(() => {
     const start = (safeCurrentPage - 1) * pageSize;
     return filteredRows.slice(start, start + pageSize);
   }, [filteredRows, safeCurrentPage]);
   const selectedCreateCategory = filteredCategories.find((category) => category.id === categoryId) ?? null;
+  // Picking a workshop pre-fills its email; the user can still correct it before saving.
+  useEffect(() => {
+    setCreateWorkshopEmail(selectedCreateCategory?.contactEmail ?? "");
+  }, [selectedCreateCategory]);
   const paymentCategoryOptions = useMemo(
     () =>
-      categories.filter(
-        (category) => category.type === (confirmingRow?.kind === "COLLECTION" ? "INCOME" : "EXPENSE")
+      collectSelectableCategories(
+        buildCategoryTree(categories, confirmingRow?.kind === "COLLECTION" ? "INCOME" : "EXPENSE")
       ),
     [categories, confirmingRow]
   );
   const selectedPaymentCategory = paymentCategoryOptions.find((category) => category.id === paymentCategoryId) ?? null;
   const canDeletePurchaseRequest = currentUserEmail === SPECIAL_DELETE_EMAIL;
   const canSelectRequester = roles.includes("ACCOUNTANT");
-  const categoryGroups = useMemo(() => {
-    const parents = filteredCategories
-      .filter((category) => !category.parentId)
-      .toSorted((a, b) => categoryDisplayName(a).localeCompare(categoryDisplayName(b), "vi"));
-    const childrenByParentId = new Map<string, Category[]>();
-    for (const category of filteredCategories) {
-      if (!category.parentId) continue;
-      const current = childrenByParentId.get(category.parentId) ?? [];
-      current.push(category);
-      childrenByParentId.set(category.parentId, current);
-    }
-    for (const [parentId, children] of childrenByParentId.entries()) {
-      childrenByParentId.set(
-        parentId,
-        children.toSorted((a, b) => categoryDisplayName(a).localeCompare(categoryDisplayName(b), "vi"))
-      );
-    }
-    return { parents, childrenByParentId };
-  }, [filteredCategories]);
+  const canCreateRequest = !roles.includes(DIEU_AM_ROLE_CODE);
+  // Wallet stock is strictly self-service: only an Account member, creating their own
+  // request, can mark it. Someone raising a request on another person's behalf never sees it.
+  const isAccountRequester = roles.includes("ACCOUNT") && !createRequesterId;
+  const conversionCandidateRows = useMemo(
+    () =>
+      rows
+        .filter((row) => row.kind === "PURCHASE" && row.status === "APPROVED" && !row.currencyConversionCount)
+        .toSorted((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
+    [rows]
+  );
 
   useEffect(() => {
-    if (!filteredCategories.length) {
-      if (categoryId) setCategoryId("");
-      return;
-    }
-
+    if (!categoryId) return;
     const hasSelected = filteredCategories.some((category) => category.id === categoryId);
     if (!hasSelected) {
-      setCategoryId(filteredCategories[0].id);
+      setCategoryId("");
     }
   }, [filteredCategories, categoryId]);
 
@@ -476,8 +558,55 @@ export default function PurchaseRequestsPage() {
     setCreateKind(kind);
     setCategoryType(kind === "COLLECTION" ? "INCOME" : "EXPENSE");
     setCategoryId("");
+    setCreateIsWalletStock(false);
     setCreateModalOpen(true);
   }
+
+  // Each role gets the walkthrough for the part of this screen it actually uses.
+  const tourAudience: TourAudience | null = roles.includes("ACCOUNTANT")
+    ? "ACCOUNTANT"
+    : roles.includes("EMPLOYEE")
+      ? "FELINE"
+      : roles.includes("ACCOUNT")
+        ? "ACCOUNT"
+        : roles.includes("WORKSHOP")
+          ? "WORKSHOP"
+          : null;
+  const showTour = tourAudience !== null;
+  const roleDocLink = tourAudience ? ROLE_DOC_LINKS[tourAudience] : undefined;
+  const [tourMenuOpen, setTourMenuOpen] = useState(false);
+  const { startTour, isTourActive: tourActive, chapters: tourChapters } = usePurchaseRequestTour({
+    audience: tourAudience ?? "FELINE",
+    userId: showTour ? currentUserId : "",
+    // The buy-back field only renders when there is at least one Account member to pick.
+    showAccountWalletStep: roles.includes("EMPLOYEE") && accountOptions.length > 0,
+    canConvertCurrency: roles.includes("ACCOUNTANT") || roles.includes("ADMIN"),
+    openCreateDialog: (kind) => openCreateModal(kind ?? "PURCHASE"),
+    closeCreateDialog: () => setCreateModalOpen(false),
+    openCategoryPicker: () => setCategoryPickerOpen(true),
+    closeCategoryPicker: () => setCategoryPickerOpen(false),
+    startDemoData: () => setTourDemoActive(true),
+    stopDemoData: () => setTourDemoActive(false),
+    openPayDialog: () => {
+      const demoRow = TOUR_DEMO_ROWS.find((row) => row.status === "APPROVED") ?? null;
+      if (!demoRow) return;
+      setConfirmingRow(demoRow);
+      setPaymentAmountInput(String(Number(demoRow.expectedAmount)));
+      setPaymentCurrencyCode(demoRow.currencyCode);
+      setPaymentCategoryId("");
+      setPaymentAccountId("");
+      setPaymentNote("");
+      setReceiptFiles([]);
+      void loadPaymentAccounts();
+    },
+    closePayDialog: () => setConfirmingRow(null),
+    openConversionDialog: () => {
+      setConversionModalOpen(true);
+      void loadPaymentAccounts();
+    },
+    closeConversionDialog: () => setConversionModalOpen(false),
+    onFirstVisit: () => setTourMenuOpen(true),
+  });
 
   async function loadRows() {
     const [requestResponse, categoryResponse] = await Promise.all([
@@ -566,7 +695,13 @@ export default function PurchaseRequestsPage() {
         if (meResponse.ok) {
           setRoles(Array.isArray(meData.user?.roles) ? meData.user.roles : []);
           setCurrentUserEmail(String(meData.user?.email ?? "").toLowerCase());
+          setCurrentUserId(String(meData.user?.id ?? ""));
         }
+        void fetch("/api/users/account-options", { cache: "no-store" })
+          .then((response) => (response.ok ? response.json() : null))
+          .then((data) => {
+            if (data?.rows) setAccountOptions(data.rows as TeamUser[]);
+          });
         if (thresholdResponse.ok) {
           const threshold =
             typeof thresholdData.accountantApprovalThresholdVnd === "number"
@@ -594,8 +729,12 @@ export default function PurchaseRequestsPage() {
       toast.error("Mô tả phải có ít nhất 3 ký tự");
       return;
     }
-    if (!categoryId) {
-      toast.error("Vui lòng chọn danh mục");
+    if (!selectedCreateCategory) {
+      toast.error("Vui lòng chọn danh mục cấp 3");
+      return;
+    }
+    if (selectedCreateCategory.level !== 3) {
+      toast.error("Vui lòng chọn đúng danh mục cấp 3");
       return;
     }
     if (!Number.isFinite(expectedAmountValue) || expectedAmountValue <= 0) {
@@ -614,6 +753,15 @@ export default function PurchaseRequestsPage() {
       formData.set("currencyCode", currencyCode);
       if (createRequesterId) {
         formData.set("requesterId", createRequesterId);
+      }
+      createTags.forEach((tag) => formData.append("tags", tag));
+      if (createWorkshopEmail.trim()) {
+        formData.set("workshopEmail", createWorkshopEmail.trim());
+      }
+      if (isAccountRequester) {
+        formData.set("isWalletStock", String(createIsWalletStock));
+      } else if (createWalletOwnerId) {
+        formData.set("walletOwnerId", createWalletOwnerId);
       }
       for (const file of createRequestReceiptFiles) {
         formData.append("receiptFiles", file);
@@ -636,6 +784,10 @@ export default function PurchaseRequestsPage() {
       setExpectedAmountInput("");
       setCreateRequesterId("");
       setCreateRequestReceiptFiles([]);
+      setCreateTags([]);
+      setCreateWorkshopEmail("");
+      setCreateWalletOwnerId("");
+      setCreateIsWalletStock(false);
       setCreateModalOpen(false);
       await loadRows();
     } finally {
@@ -644,6 +796,10 @@ export default function PurchaseRequestsPage() {
   }
 
   async function runAction(id: string, action: "approve" | "reject", note?: string): Promise<boolean> {
+    if (tourDemoActive) {
+      toast.info("Đây là phiếu mẫu trong bài hướng dẫn, không thực hiện thật.");
+      return false;
+    }
     const nextPendingOnCurrentPage = paginatedRows.find(
       (row) => row.id !== id && row.status === "PENDING_APPROVAL"
     )?.id;
@@ -720,6 +876,10 @@ export default function PurchaseRequestsPage() {
   }
 
   async function confirmTransfer(id: string) {
+    if (tourDemoActive) {
+      toast.info("Đây là phiếu mẫu trong bài hướng dẫn, không ghi sổ thật.");
+      return;
+    }
     const paymentAmountValue = Number(paymentAmountInput);
     if (!Number.isFinite(paymentAmountValue) || paymentAmountValue <= 0) {
       toast.error("Số tiền thực chuyển phải lớn hơn 0");
@@ -859,8 +1019,8 @@ export default function PurchaseRequestsPage() {
     }
   }
 
-  function onManageReceiptFilesChange(files: FileList | null) {
-    const nextFiles = Array.from(files ?? []);
+  async function onManageReceiptFilesChange(files: FileList | null) {
+    const nextFiles = await snapshotFiles(files ?? []);
     setManageReceiptFiles(nextFiles);
     setManageReceiptPreviews((current) => {
       current.forEach((item) => URL.revokeObjectURL(item.url));
@@ -883,17 +1043,69 @@ export default function PurchaseRequestsPage() {
         <CardHeader className="flex flex-row items-center justify-between gap-3">
           <CardTitle>Danh sách yêu cầu</CardTitle>
           <div className="flex flex-wrap gap-2">
-            <Button size="sm" variant="outline" onClick={() => openCreateModal("COLLECTION")}>
-              Tạo yêu cầu thu
-            </Button>
-            <Button size="sm" onClick={() => openCreateModal("PURCHASE")}>
-              Tạo yêu cầu mua
-            </Button>
+            {(roles.includes("ACCOUNTANT") || roles.includes("ADMIN")) && (
+              <Button
+                size="sm"
+                variant="outline"
+                data-tour="conversion-button"
+                onClick={() => {
+                  setConversionModalOpen(true);
+                  void loadPaymentAccounts();
+                }}
+              >
+                <RefreshCcw className="mr-2 size-4" />
+                Quy đổi tiền tệ
+              </Button>
+            )}
+            {canCreateRequest ? (
+              <Button size="sm" variant="outline" data-tour="collection-button" onClick={() => openCreateModal("COLLECTION")}>
+                Tạo yêu cầu thu
+              </Button>
+            ) : null}
+            {roleDocLink ? (
+              <div className="flex items-center">
+                <Button size="sm" variant="ghost" asChild>
+                  <a href={roleDocLink.href} target="_blank" rel="noreferrer">
+                    <BookOpen className="mr-2 size-4" />
+                    {roleDocLink.label}
+                  </a>
+                </Button>
+                <TooltipProvider delayDuration={100}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className="inline-flex size-7 items-center justify-center rounded-md text-amber-600 transition hover:bg-muted"
+                        aria-label={roleDocLink.hint}
+                      >
+                        <AlertCircle className="size-4" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent className="max-w-[280px]">{roleDocLink.hint}</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </div>
+            ) : null}
+            {showTour ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => (tourChapters.length ? setTourMenuOpen(true) : startTour())}
+              >
+                <HelpCircle className="mr-2 size-4" />
+                Hướng dẫn
+              </Button>
+            ) : null}
+            {canCreateRequest ? (
+              <Button size="sm" data-tour="create-button" onClick={() => openCreateModal("PURCHASE")}>
+                Tạo yêu cầu mua
+              </Button>
+            ) : null}
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">
-            <div className="flex flex-wrap items-end gap-2">
+            <div className="flex flex-wrap items-end gap-2 [&>div]:w-full sm:[&>div]:w-auto" data-tour="filters">
               <div className="space-y-1">
                 <Label className="text-xs text-muted-foreground">Khoảng ngày</Label>
                 <Popover>
@@ -923,7 +1135,7 @@ export default function PurchaseRequestsPage() {
               <div className="space-y-1">
                 <Label className="text-xs text-muted-foreground">Người tạo</Label>
                 <Select value={draftRequesterId} onValueChange={setDraftRequesterId}>
-                  <SelectTrigger className="w-[240px]">
+                  <SelectTrigger className="w-full sm:w-[240px]">
                     <SelectValue placeholder="Người tạo yêu cầu" />
                   </SelectTrigger>
                   <SelectContent>
@@ -939,7 +1151,7 @@ export default function PurchaseRequestsPage() {
               <div className="space-y-1">
                 <Label className="text-xs text-muted-foreground">Danh mục</Label>
                 <Select value={draftCategoryFilterId} onValueChange={setDraftCategoryFilterId}>
-                  <SelectTrigger className="w-[220px]">
+                  <SelectTrigger className="w-full sm:w-[220px]">
                     <SelectValue placeholder="Danh mục" />
                   </SelectTrigger>
                   <SelectContent>
@@ -958,7 +1170,7 @@ export default function PurchaseRequestsPage() {
                   value={draftKindFilter}
                   onValueChange={(value) => setDraftKindFilter(value as "__ALL__" | "PURCHASE" | "COLLECTION")}
                 >
-                  <SelectTrigger className="w-[160px]">
+                  <SelectTrigger className="w-full sm:w-[160px]">
                     <SelectValue placeholder="Loại yêu cầu" />
                   </SelectTrigger>
                   <SelectContent>
@@ -974,7 +1186,7 @@ export default function PurchaseRequestsPage() {
                   value={draftStatusFilter}
                   onValueChange={(value) => setDraftStatusFilter(value as PurchaseRequestStatusFilter)}
                 >
-                  <SelectTrigger className="w-[180px]">
+                  <SelectTrigger className="w-full sm:w-[180px]">
                     <SelectValue placeholder="Trạng thái" />
                   </SelectTrigger>
                   <SelectContent>
@@ -1012,8 +1224,8 @@ export default function PurchaseRequestsPage() {
               </div>
             </div>
           </div>
-          <div className="rounded-lg border">
-            <Table>
+          <div className="rounded-lg border" data-tour="request-table">
+            <Table className="min-w-[1100px]">
               <TableHeader>
                 <TableRow>
                   <TableHead>STT</TableHead>
@@ -1025,13 +1237,13 @@ export default function PurchaseRequestsPage() {
                   <TableHead>Trạng thái</TableHead>
                   <TableHead>Người xử lý</TableHead>
                   <TableHead>Xác nhận chuyển tiền</TableHead>
-                  <TableHead>Ghi chú chuyển tiền</TableHead>
+                  <TableHead>Transaction ID</TableHead>
                   <TableHead>Ảnh chứng từ</TableHead>
                   <TableHead className="text-right">Thao tác</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {paginatedRows.map((row, index) => {
+                {(tourDemoActive ? TOUR_DEMO_ROWS : paginatedRows).map((row, index) => {
                   const approvedBy = row.approvals?.find((approval) => approval.action === "APPROVE")?.actor.fullName;
                   const rejectApproval = row.approvals?.find((approval) => approval.action === "REJECT");
                   const rejectedBy = rejectApproval?.actor.fullName;
@@ -1040,6 +1252,7 @@ export default function PurchaseRequestsPage() {
                   const confirmedBy = row.transactions?.[0]?.creator.fullName;
                   const transferNote = getTransferNote(row.transactions?.[0]);
                   const status = statusUi(row.status);
+                  const conversionStatus = currencyConversionStatusUi(row.currencyConversionStatus);
                   const amountVnd = Number(row.expectedAmount) * (row.currencyCode === "USD" ? 25_000 : 1);
                   const categoryApprovalThresholdVnd =
                     row.category?.accountantApprovalThresholdVnd ?? accountantApprovalThresholdVnd;
@@ -1078,7 +1291,16 @@ export default function PurchaseRequestsPage() {
                         <p className="mt-1 text-sm whitespace-pre-line">{row.description}</p>
                       </TableCell>
                       <TableCell className="align-top">
-                        {row.category ? categoryDisplayName(row.category) : "Chưa chọn"}
+                        <p>{row.category ? categoryDisplayName(row.category) : "Chưa chọn"}</p>
+                        {row.tags?.length ? (
+                          <p className="mt-1 text-xs text-muted-foreground">{row.tags.join(", ")}</p>
+                        ) : null}
+                        {row.workshopEmail ? (
+                          <p className="mt-1 text-xs text-muted-foreground">{row.workshopEmail}</p>
+                        ) : null}
+                        {row.walletOwnerName ? (
+                          <p className="mt-1 text-xs text-muted-foreground">Mua lại từ ví: {row.walletOwnerName}</p>
+                        ) : null}
                       </TableCell>
                       <TableCell className="align-top">
                         <p className="font-medium">
@@ -1095,6 +1317,11 @@ export default function PurchaseRequestsPage() {
                         <Badge className={status.className} variant="outline">
                           {status.label}
                         </Badge>
+                        {conversionStatus ? (
+                          <Badge className={`mt-1 block w-fit ${conversionStatus.className}`} variant="outline">
+                            {conversionStatus.label}
+                          </Badge>
+                        ) : null}
                         {row.status === "REJECTED" && rejectNote ? (
                           <p className="mt-1 max-w-[220px] whitespace-pre-line text-xs text-rose-700">
                             Lý do: {rejectNote}
@@ -1126,10 +1353,11 @@ export default function PurchaseRequestsPage() {
                         )}
                       </TableCell>
                       <TableCell className="align-top">
-                        <div className="flex flex-wrap justify-end gap-2">
+                        <div className="flex flex-wrap justify-end gap-2" data-tour="row-actions">
                           {showApproveAction && (
                             <Button
                               size="xs"
+                              data-tour="approve-button"
                               disabled={Boolean(rowActionLoading)}
                               onClick={() => runAction(row.id, "approve")}
                             >
@@ -1139,6 +1367,7 @@ export default function PurchaseRequestsPage() {
                           {showRejectAction && (
                             <Button
                               size="xs"
+                              data-tour="reject-button"
                               variant="destructive"
                               disabled={Boolean(rowActionLoading)}
                               onClick={() => {
@@ -1152,6 +1381,7 @@ export default function PurchaseRequestsPage() {
                           {showConfirmTransfer && (
                             <Button
                               size="xs"
+                              data-tour="pay-button"
                               variant="secondary"
                               onClick={() => {
                                 setConfirmingRow(row);
@@ -1241,8 +1471,62 @@ export default function PurchaseRequestsPage() {
         </CardContent>
       </Card>
 
+      <Dialog open={tourMenuOpen} onOpenChange={setTourMenuOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Hướng dẫn sử dụng</DialogTitle>
+            <DialogDescription>Chọn phần bạn muốn xem. Mỗi bài đi thẳng vào một công đoạn.</DialogDescription>
+          </DialogHeader>
+          <ul className="divide-y rounded-md border">
+            {tourChapters.map((chapter) => (
+              <li key={chapter.id}>
+                <button
+                  type="button"
+                  className="flex w-full flex-col gap-0.5 px-3 py-3 text-left transition hover:bg-muted"
+                  onClick={() => {
+                    setTourMenuOpen(false);
+                    window.setTimeout(() => startTour(chapter.id), 150);
+                  }}
+                >
+                  <span className="text-sm font-medium">{chapter.title}</span>
+                  <span className="text-xs text-muted-foreground">{chapter.description}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <DialogFooter>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setTourMenuOpen(false);
+                window.setTimeout(() => startTour(), 150);
+              }}
+            >
+              Xem toàn bộ
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <CurrencyConversionDialog
+        open={conversionModalOpen}
+        onOpenChange={setConversionModalOpen}
+        lockClose={tourActive}
+        candidateRows={conversionCandidateRows}
+        paymentAccounts={paymentAccounts}
+        onCreated={loadRows}
+      />
+
       <Dialog open={createModalOpen} onOpenChange={setCreateModalOpen}>
-        <DialogContent className="sm:max-w-xl">
+        <DialogContent className="sm:max-w-xl"
+          onInteractOutside={(event) => {
+            if (tourActive) event.preventDefault();
+          }}
+          onEscapeKeyDown={(event) => {
+            if (tourActive) event.preventDefault();
+          }}
+        >
           <DialogHeader>
             <DialogTitle>{createKind === "COLLECTION" ? "Tạo yêu cầu thu" : "Tạo yêu cầu mua"}</DialogTitle>
             <DialogDescription>
@@ -1253,7 +1537,7 @@ export default function PurchaseRequestsPage() {
           </DialogHeader>
           <div className="space-y-3">
             {canSelectRequester && (
-              <div className="space-y-2">
+              <div className="space-y-2" data-tour="form-requester">
                 <Label>Nhân viên (không bắt buộc)</Label>
                 <Select
                   value={createRequesterId || undefined}
@@ -1273,15 +1557,19 @@ export default function PurchaseRequestsPage() {
                 </Select>
               </div>
             )}
-            <div className="space-y-2">
+            <div className="space-y-2" data-tour="form-title">
               <Label>Tiêu đề</Label>
               <Input value={title} onChange={(event) => setTitle(event.target.value)} />
             </div>
-            <div className="space-y-2">
+            <div className="space-y-2" data-tour="form-description">
               <Label>Mô tả</Label>
               <Textarea value={description} onChange={(event) => setDescription(event.target.value)} />
             </div>
-            <div className="space-y-2">
+            <div className="space-y-2" data-tour="form-tags">
+              <Label>Tag</Label>
+              <TagInput tags={createTags} onTagsChange={setCreateTags} disabled={creatingRequest} />
+            </div>
+            <div className="space-y-2" data-tour="form-currency">
               <Label>Tiền tệ</Label>
               <Tabs value={currencyCode} onValueChange={(value) => setCurrencyCode(value as "USD" | "VND")}>
                 <TabsList className="grid w-full grid-cols-2">
@@ -1305,7 +1593,7 @@ export default function PurchaseRequestsPage() {
                 </Badge>
               </div>
             </div>
-            <div className="space-y-2">
+            <div className="space-y-2" data-tour="form-category">
               <Label>Danh mục</Label>
               <Button
                 size="sm"
@@ -1321,7 +1609,64 @@ export default function PurchaseRequestsPage() {
                 <p className="text-xs text-muted-foreground">Không có danh mục cho loại đã chọn.</p>
               )}
             </div>
-            <div className="space-y-2">
+            {createKind === "PURCHASE" && isAccountRequester ? (
+              <div className="space-y-2 rounded-md border p-3" data-tour="form-wallet-stock">
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 size-4"
+                    checked={createIsWalletStock}
+                    onChange={(event) => setCreateIsWalletStock(event.target.checked)}
+                  />
+                  <span>
+                    <span className="font-medium">Mua để chia lại cho team</span>
+                    <span className="block text-xs text-muted-foreground">
+                      Chỉ tích nếu đây là hàng mua để người khác lấy lại, mặc định không đưa vào ví.
+                    </span>
+                  </span>
+                </label>
+              </div>
+            ) : null}
+
+            {createKind === "PURCHASE" && accountOptions.length && roles.includes("EMPLOYEE") ? (
+              <div className="space-y-2" data-tour="form-account-wallet">
+                <Label>Lấy hàng từ Account (không bắt buộc)</Label>
+                <Select
+                  value={createWalletOwnerId || "__NONE__"}
+                  onValueChange={(value) => setCreateWalletOwnerId(value === "__NONE__" ? "" : value)}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Mua ngoài" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__NONE__">Mua ngoài</SelectItem>
+                    {accountOptions.map((option) => (
+                      <SelectItem key={option.id} value={option.id}>
+                        {option.fullName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Chỉ chọn khi bạn lấy hàng có sẵn của người đó thay vì mua ngoài.
+                </p>
+              </div>
+            ) : null}
+
+            {selectedCreateCategory?.contactEmail || createWorkshopEmail ? (
+              <div className="space-y-2">
+                <Label htmlFor="create-workshop-email">Email xưởng</Label>
+                <Input
+                  id="create-workshop-email"
+                  type="email"
+                  value={createWorkshopEmail}
+                  onChange={(event) => setCreateWorkshopEmail(event.target.value)}
+                  placeholder="Email của xưởng"
+                />
+                <p className="text-xs text-muted-foreground">Tự điền theo xưởng đã chọn, sửa được nếu cần.</p>
+              </div>
+            ) : null}
+            <div className="space-y-2" data-tour="form-amount">
               <Label>Số tiền đề xuất</Label>
               <Input
                 type="number"
@@ -1335,7 +1680,7 @@ export default function PurchaseRequestsPage() {
                 {amountInWords ? `Bằng chữ: ${amountInWords}` : "Nhập trực tiếp tổng số tiền cần đề xuất."}
               </p>
             </div>
-            <div className="space-y-2">
+            <div className="space-y-2" data-tour="form-receipts">
               <Label>Ảnh chứng từ</Label>
               <ReceiptImageUploader
                 files={createRequestReceiptFiles}
@@ -1353,11 +1698,15 @@ export default function PurchaseRequestsPage() {
                 setCreateModalOpen(false);
                 setCreateRequesterId("");
                 setCreateRequestReceiptFiles([]);
+                setCreateTags([]);
+                setCreateWorkshopEmail("");
+                setCreateWalletOwnerId("");
+                setCreateIsWalletStock(false);
               }}
             >
               Hủy
             </Button>
-            <Button size="sm" disabled={creatingRequest} onClick={createRequest}>
+            <Button size="sm" data-tour="form-submit" disabled={creatingRequest} onClick={createRequest}>
               {creatingRequest ? "Đang tạo..." : "Tạo yêu cầu"}
             </Button>
           </DialogFooter>
@@ -1368,81 +1717,31 @@ export default function PurchaseRequestsPage() {
         open={categoryPickerOpen}
         onOpenChange={setCategoryPickerOpen}
       >
-        <DialogContent className="max-h-[85vh] overflow-hidden sm:max-w-4xl">
+        <DialogContent className="overflow-y-auto sm:max-w-4xl"
+          onInteractOutside={(event) => {
+            if (tourActive) event.preventDefault();
+          }}
+          onEscapeKeyDown={(event) => {
+            if (tourActive) event.preventDefault();
+          }}
+        >
           <DialogHeader>
             <DialogTitle>Chọn danh mục</DialogTitle>
             <DialogDescription>
               Danh sách danh mục loại {categoryType === "EXPENSE" ? "Chi" : "Thu"}.
             </DialogDescription>
           </DialogHeader>
-          {!filteredCategories.length ? (
-            <p className="text-sm text-muted-foreground">Không có danh mục cho loại đã chọn.</p>
-          ) : (
-            <ul className="max-h-[60vh] overflow-y-auto divide-y rounded-md border">
-              {categoryGroups.parents.map((parent) => {
-                const children = categoryGroups.childrenByParentId.get(parent.id) ?? [];
-                const expanded = expandedCategoryParents.includes(parent.id);
-                const selectedParent = parent.id === categoryId;
-                return (
-                  <li key={parent.id} className="py-1">
-                    <div className="flex items-center gap-1 px-2">
-                      <button
-                        type="button"
-                        className={`flex-1 rounded px-2 py-1.5 text-left text-sm transition ${
-                          selectedParent ? "font-semibold text-primary" : "hover:bg-muted"
-                        }`}
-                        onClick={() => {
-                          setCategoryId(parent.id);
-                          setCategoryPickerOpen(false);
-                        }}
-                      >
-                        {categoryDisplayName(parent)}
-                      </button>
-                      {children.length > 0 ? (
-                        <Button
-                          type="button"
-                          size="icon"
-                          variant="ghost"
-                          className="h-8 w-8"
-                          aria-label="Mở danh mục con"
-                          onClick={() =>
-                            setExpandedCategoryParents((prev) =>
-                              prev.includes(parent.id) ? prev.filter((id) => id !== parent.id) : [...prev, parent.id]
-                            )
-                          }
-                        >
-                          <ChevronRight className={`size-4 transition-transform ${expanded ? "rotate-90" : ""}`} />
-                        </Button>
-                      ) : null}
-                    </div>
-                    {children.length > 0 && expanded ? (
-                      <ul className="mt-1 space-y-0.5 pl-8 pr-2">
-                        {children.map((child) => {
-                          const selectedChild = child.id === categoryId;
-                          return (
-                            <li key={child.id}>
-                              <button
-                                type="button"
-                                className={`w-full rounded px-2 py-1 text-left text-sm transition ${
-                                  selectedChild ? "font-semibold text-primary" : "hover:bg-muted"
-                                }`}
-                                onClick={() => {
-                                  setCategoryId(child.id);
-                                  setCategoryPickerOpen(false);
-                                }}
-                              >
-                                {categoryDisplayName(child)}
-                              </button>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    ) : null}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
+          <div className="max-h-[60vh] overflow-y-auto" data-tour="category-list">
+            <CategoryPickerTree
+              nodes={categoryTree}
+              selectedId={categoryId}
+              onSelect={(nextId) => {
+                setCategoryId(nextId);
+                setCategoryPickerOpen(false);
+              }}
+              emptyLabel="Không có danh mục cho loại đã chọn."
+            />
+          </div>
           <DialogFooter>
             <Button size="sm" variant="outline" onClick={() => setCategoryPickerOpen(false)}>
               Đóng
@@ -1465,7 +1764,14 @@ export default function PurchaseRequestsPage() {
           }
         }}
       >
-        <DialogContent className="sm:max-w-xl">
+        <DialogContent className="sm:max-w-xl"
+          onInteractOutside={(event) => {
+            if (tourActive) event.preventDefault();
+          }}
+          onEscapeKeyDown={(event) => {
+            if (tourActive) event.preventDefault();
+          }}
+        >
           <DialogHeader>
             <DialogTitle>
               {confirmingRow?.kind === "COLLECTION" ? "Xác nhận đã nhận tiền" : "Xác nhận chuyển tiền"}
@@ -1484,7 +1790,7 @@ export default function PurchaseRequestsPage() {
                 </p>
               </div>
 
-              <div className="space-y-2">
+              <div className="space-y-2" data-tour="pay-category">
                 <Label>{confirmingRow.kind === "COLLECTION" ? "Danh mục thu" : "Danh mục thanh toán"}</Label>
                 <Select
                   value={paymentCategoryId || "__NONE__"}
@@ -1513,7 +1819,7 @@ export default function PurchaseRequestsPage() {
                 )}
               </div>
 
-              <div className="space-y-2">
+              <div className="space-y-2" data-tour="pay-amount">
                 <Label>Số tiền thực chuyển</Label>
                 <Tabs value={paymentCurrencyCode} onValueChange={(value) => setPaymentCurrencyCode(value as "USD" | "VND")}>
                   <TabsList className="grid w-full grid-cols-2">
@@ -1537,7 +1843,7 @@ export default function PurchaseRequestsPage() {
                 </p>
               </div>
 
-              <div className="space-y-2">
+              <div className="space-y-2" data-tour="pay-account">
                 <Label>Tài khoản thanh toán</Label>
                 <Select
                   value={paymentAccountId || "__NONE__"}
@@ -1557,16 +1863,16 @@ export default function PurchaseRequestsPage() {
                 </Select>
               </div>
 
-              <div className="space-y-2">
-                <Label>Ghi chú chuyển tiền</Label>
+              <div className="space-y-2" data-tour="pay-transaction-id">
+                <Label>Transaction ID</Label>
                 <Input
                   value={paymentNote}
                   onChange={(event) => setPaymentNote(event.target.value)}
-                  placeholder="Đã chuyển khoản qua ngân hàng..."
+                  placeholder="Mã giao dịch chuyển khoản"
                 />
               </div>
 
-              <div className="space-y-2">
+              <div className="space-y-2" data-tour="pay-receipts">
                 <Label>Ảnh chứng từ (có thể chọn nhiều ảnh)</Label>
                 <ReceiptImageUploader
                   files={receiptFiles}
@@ -1682,7 +1988,7 @@ export default function PurchaseRequestsPage() {
                   type="file"
                   accept="image/*"
                   multiple
-                  onChange={(event) => onManageReceiptFilesChange(event.currentTarget.files)}
+                  onChange={(event) => void onManageReceiptFilesChange(event.currentTarget.files)}
                 />
                 <p className="text-xs text-muted-foreground">Đã chọn: {manageReceiptFiles.length} ảnh</p>
                 {!!manageReceiptPreviews.length && (

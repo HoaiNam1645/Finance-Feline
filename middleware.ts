@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { jwtVerify } from "jose";
+import { isStaffOnly } from "@/lib/roles";
 
 const SESSION_COOKIE = "finance_session";
 const encoder = new TextEncoder();
@@ -45,7 +46,7 @@ export async function middleware(request: NextRequest) {
   if (token && !pathname.startsWith("/api") && pathname !== "/login") {
     const roles = await getRolesFromToken(token);
     const isAccountantOnly = roles.includes("ACCOUNTANT") && !roles.includes("ADMIN");
-    const isEmployeeOnly = roles.includes("EMPLOYEE") && !roles.includes("ADMIN") && !roles.includes("ACCOUNTANT");
+    const isEmployeeOnly = isStaffOnly(roles);
     const restrictedPaths = ["/settings", "/categories", "/logs", "/users"];
     if (isEmployeeOnly && restrictedPaths.some((path) => pathname.startsWith(path))) {
       return NextResponse.redirect(new URL("/dashboard", request.url));

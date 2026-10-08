@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { CategoryMigration } from "@/components/app/category-migration";
 import { CategoriesManager } from "@/components/app/categories-manager";
+import { CategoryReassign } from "@/components/app/category-reassign";
 import { getSessionUser } from "@/lib/auth";
 
 export default async function CategoriesPage() {
@@ -15,6 +16,7 @@ export default async function CategoriesPage() {
     <div className="space-y-6">
       <CategoryMigration />
       <CategoriesManager />
+      <CategoryReassign />
     </div>
   );
 }

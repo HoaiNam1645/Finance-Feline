@@ -1,7 +1,9 @@
 import { redirect } from "next/navigation";
-import { DashboardOverview } from "@/components/app/dashboard-overview";
+import { AdminDashboard } from "@/components/app/admin-dashboard";
 import { EmployeeDashboardOverview } from "@/components/app/employee-dashboard-overview";
 import { getSessionUser } from "@/lib/auth";
+import { DIEU_AM_CATEGORY_BRANCH_CODE, DIEU_AM_ROLE_CODE } from "@/lib/dieu-am-scope";
+import { isStaffOnly } from "@/lib/roles";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -13,14 +15,24 @@ export default async function DashboardPage() {
   }
 
   const isAdminOrAccountant = user.roles.includes("ADMIN") || user.roles.includes("ACCOUNTANT");
-  const isEmployeeOnly =
-    user.roles.includes("EMPLOYEE") && !user.roles.includes("ADMIN") && !user.roles.includes("ACCOUNTANT");
+  if (!isAdminOrAccountant && user.roles.includes(DIEU_AM_ROLE_CODE)) {
+    return (
+      <AdminDashboard
+        staffRoleCode={DIEU_AM_ROLE_CODE}
+        categoryRootCode={DIEU_AM_CATEGORY_BRANCH_CODE}
+        excludedCategoryBranchCodes={[]}
+        title="Dashboard Dieu Am"
+        description="Thống kê các giao dịch thuộc nhánh Dieu Am."
+        variant="category-only"
+      />
+    );
+  }
 
+  const isEmployeeOnly = isStaffOnly(user.roles);
   if (isEmployeeOnly) {
     const startOfMonth = new Date();
     startOfMonth.setHours(0, 0, 0, 0);
     startOfMonth.setDate(1);
-
     const [requestStatusRows, recentRequests, monthlyTransactionRows, recentTransactions, pendingAdjustmentCount] =
       await Promise.all([
         prisma.purchaseRequest.groupBy({
@@ -76,12 +88,10 @@ export default async function DashboardPage() {
           },
         }),
       ]);
-
     const requestCountByStatus = new Map<string, number>();
     for (const row of requestStatusRows) {
       requestCountByStatus.set(row.status, row._count._all);
     }
-
     let monthlyIncomeVnd = 0;
     let monthlyExpenseVnd = 0;
     let monthlyTransactionCount = 0;
@@ -135,74 +145,5 @@ export default async function DashboardPage() {
     redirect("/purchase-requests");
   }
 
-  const now = new Date();
-  const startOfPreviousYear = new Date(now.getFullYear() - 1, 0, 1);
-
-  const transactions = await prisma.transaction.findMany({
-    where: { transactionDate: { gte: startOfPreviousYear } },
-    orderBy: { transactionDate: "asc" },
-    select: {
-      id: true,
-      direction: true,
-      amountVnd: true,
-      transactionDate: true,
-      description: true,
-      category: { select: { name: true, parent: { select: { name: true } } } },
-      teamUsers: { select: { user: { select: { id: true, fullName: true } } } },
-    },
-  });
-
-  const teamUsers = await prisma.user.findMany({
-    where: {
-      status: "ACTIVE",
-      roles: {
-        some: {
-          role: { code: "EMPLOYEE" },
-        },
-      },
-      AND: [
-        {
-          roles: {
-            none: {
-              role: { code: "ADMIN" },
-            },
-          },
-        },
-        {
-          roles: {
-            none: {
-              role: { code: "ACCOUNTANT" },
-            },
-          },
-        },
-      ],
-    },
-    orderBy: { fullName: "asc" },
-    select: {
-      id: true,
-      fullName: true,
-    },
-  });
-
-  return (
-    <DashboardOverview
-      teamUsers={teamUsers.map((item: (typeof teamUsers)[number]) => ({
-        id: item.id,
-        name: item.fullName,
-      }))}
-      transactions={transactions.map((transaction: (typeof transactions)[number]) => ({
-        id: transaction.id,
-        direction: transaction.direction,
-        amountVnd: Number(transaction.amountVnd),
-        transactionDate: transaction.transactionDate.toISOString(),
-        categoryName: transaction.category.name,
-        categoryParentName: transaction.category.parent?.name ?? null,
-        teamUsers: transaction.teamUsers.map((link: (typeof transaction.teamUsers)[number]) => ({
-          id: link.user.id,
-          name: link.user.fullName,
-        })),
-        description: transaction.description,
-      }))}
-    />
-  );
+  return <AdminDashboard variant="compact" />;
 }

@@ -1,4 +1,6 @@
 import { DeleteObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
+import path from "node:path";
 
 const MAX_RECEIPT_FILES_PER_REQUEST = 30;
 const MAX_RECEIPT_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
@@ -73,6 +75,10 @@ function makeObjectKey(fileName: string) {
   return `finance/receipts/${new Date().getUTCFullYear()}/${Date.now()}-${crypto.randomUUID()}-${safeBaseName(fileName)}`;
 }
 
+function makeLocalReceiptPath(fileName: string) {
+  return `/uploads/receipts/${new Date().getUTCFullYear()}/${Date.now()}-${crypto.randomUUID()}-${safeBaseName(fileName)}`;
+}
+
 export async function saveReceiptFiles(files: File[]) {
   if (files.length === 0) {
     return [] as Array<{ filePath: string; fileName: string; mimeType: string; size: number }>;
@@ -81,7 +87,14 @@ export async function saveReceiptFiles(files: File[]) {
     throw new Error("RECEIPT_TOO_MANY_FILES");
   }
 
-  const { client, bucket, publicHost } = createSpacesConfig();
+  let spacesConfig: ReturnType<typeof createSpacesConfig> | null = null;
+  try {
+    spacesConfig = createSpacesConfig();
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "RECEIPT_STORAGE_NOT_CONFIGURED") {
+      throw error;
+    }
+  }
 
   const saved: Array<{ filePath: string; fileName: string; mimeType: string; size: number }> = [];
 
@@ -95,11 +108,25 @@ export async function saveReceiptFiles(files: File[]) {
 
     const buffer = Buffer.from(await file.arrayBuffer());
     const finalName = file.name || "receipt.bin";
+    if (!spacesConfig) {
+      const publicPath = makeLocalReceiptPath(finalName);
+      const absolutePath = path.join(process.cwd(), "public", publicPath.replace(/^\/+/, ""));
+      await mkdir(path.dirname(absolutePath), { recursive: true });
+      await writeFile(absolutePath, buffer);
+      saved.push({
+        filePath: publicPath,
+        fileName: finalName,
+        mimeType: file.type || "application/octet-stream",
+        size: file.size,
+      });
+      continue;
+    }
+
     const key = makeObjectKey(finalName);
 
-    await client.send(
+    await spacesConfig.client.send(
       new PutObjectCommand({
-        Bucket: bucket,
+        Bucket: spacesConfig.bucket,
         Key: key,
         Body: buffer,
         ACL: "public-read",
@@ -108,7 +135,7 @@ export async function saveReceiptFiles(files: File[]) {
     );
 
     saved.push({
-      filePath: `https://${publicHost}/${key}`,
+      filePath: `https://${spacesConfig.publicHost}/${key}`,
       fileName: finalName,
       mimeType: file.type || "application/octet-stream",
       size: file.size,
@@ -119,6 +146,11 @@ export async function saveReceiptFiles(files: File[]) {
 }
 
 export async function deleteReceiptFile(filePath: string) {
+  if (filePath.startsWith("/uploads/")) {
+    await unlink(path.join(process.cwd(), "public", filePath.replace(/^\/+/, ""))).catch(() => {});
+    return;
+  }
+
   const { client, bucket, endpointHost, publicHost } = createSpacesConfig();
 
   let url: URL;

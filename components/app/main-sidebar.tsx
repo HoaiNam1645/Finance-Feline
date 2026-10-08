@@ -4,9 +4,11 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { CreditCard, LayoutDashboard, Moon, PackageCheck, Sun, Tags, Users, WalletCards } from "lucide-react";
+import { CreditCard, HandCoins, LayoutDashboard, Moon, PackageCheck, RefreshCcw, ScrollText, Sun, Tags, Users, Wallet, WalletCards } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
+import { ChevronRight } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   Sidebar,
   SidebarContent,
@@ -19,27 +21,41 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
+import { DIEU_AM_ROLE_CODE } from "@/lib/dieu-am-scope";
+import { roleLabel, STAFF_ROLE_CODES } from "@/lib/roles";
 
 const links = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["ADMIN", "ACCOUNTANT", "EMPLOYEE"] },
+  {
+    href: "/dashboard",
+    label: "Dashboard",
+    icon: LayoutDashboard,
+    roles: ["ADMIN", "ACCOUNTANT", ...STAFF_ROLE_CODES, DIEU_AM_ROLE_CODE],
+    children: [
+      { href: "/dashboard", label: "Tổng quan", roles: ["ADMIN", "ACCOUNTANT", ...STAFF_ROLE_CODES, DIEU_AM_ROLE_CODE] },
+      { href: "/dashboard/feline", label: "Feline", roles: ["ADMIN", "ACCOUNTANT"] },
+      { href: "/dashboard/supplier", label: "Supplier", roles: ["ADMIN", "ACCOUNTANT"] },
+    ],
+  },
   { href: "/purchase-requests", label: "Yêu cầu mua", icon: PackageCheck, roles: [] as string[] },
-  { href: "/transactions", label: "Sổ giao dịch", icon: CreditCard, roles: ["ADMIN", "ACCOUNTANT", "EMPLOYEE"] },
+  { href: "/operating-rules", label: "Quy định vận hành", icon: ScrollText, roles: [] as string[] },
+  { href: "/currency-conversions", label: "Quy đổi tiền tệ", icon: RefreshCcw, roles: ["ADMIN", "ACCOUNTANT"] },
+  { href: "/external-receivables", label: "Công nợ", icon: HandCoins, roles: ["ADMIN", "ACCOUNTANT"] },
+  { href: "/transactions", label: "Sổ giao dịch", icon: CreditCard, roles: ["ADMIN", "ACCOUNTANT", ...STAFF_ROLE_CODES, DIEU_AM_ROLE_CODE] },
+  { href: "/account-wallets", label: "Ví Account", icon: Wallet, roles: ["ADMIN", "ACCOUNTANT", "ACCOUNT"] },
   { href: "/categories", label: "Danh mục", icon: Tags, roles: ["ADMIN", "ACCOUNTANT"] },
   { href: "/payment-accounts", label: "Tài khoản thanh toán", icon: WalletCards, roles: ["ADMIN"] },
   { href: "/users", label: "Quản lý user", icon: Users, roles: ["ADMIN"] },
   // { href: "/logs", label: "Logs", icon: ClipboardList, roles: ["ADMIN"] },
 ];
 
-function mapRoleLabel(role: string) {
-  if (role === "ADMIN") return "Quản trị";
-  if (role === "ACCOUNTANT") return "Kế toán";
-  if (role === "EMPLOYEE") return "Nhân viên";
-  return role;
-}
+const mapRoleLabel = roleLabel;
 
 export function MainSidebar({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -153,30 +169,64 @@ export function MainSidebar({ children }: { children: React.ReactNode }) {
             <SidebarGroupLabel>Điều hướng</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                {visibleLinks.map((link) => (
-                  <SidebarMenuItem key={link.href}>
-                    <SidebarMenuButton isActive={pathname.startsWith(link.href)} asChild>
-                      <Link href={link.href}>
-                        <link.icon className="size-4" />
-                        <span>{link.label}</span>
-                        {link.href === "/purchase-requests" &&
-                        pendingPurchaseRequestCount > 0 &&
-                        (roles.includes("ADMIN") || roles.includes("ACCOUNTANT")) ? (
-                          <span className="ml-auto rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
-                            {pendingPurchaseRequestCount}
-                          </span>
-                        ) : null}
-                        {link.href === "/transactions" &&
-                        pendingAdjustmentCount > 0 &&
-                        roles.includes("ADMIN") ? (
-                          <span className="ml-auto rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
-                            {pendingAdjustmentCount}
-                          </span>
-                        ) : null}
-                      </Link>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
+                {visibleLinks.map((link) => {
+                  const visibleChildren = (link.children ?? []).filter(
+                    (child) => child.roles.length === 0 || child.roles.some((role) => roles.includes(role))
+                  );
+
+                  if (visibleChildren.length > 0) {
+                    const groupActive = visibleChildren.some((child) => pathname === child.href);
+                    return (
+                      <Collapsible key={link.href} defaultOpen={groupActive} className="group/collapsible">
+                        <SidebarMenuItem>
+                          <CollapsibleTrigger asChild>
+                            <SidebarMenuButton isActive={groupActive}>
+                              <link.icon className="size-4" />
+                              <span>{link.label}</span>
+                              <ChevronRight className="ml-auto size-4 transition-transform group-data-[state=open]/collapsible:rotate-90" />
+                            </SidebarMenuButton>
+                          </CollapsibleTrigger>
+                          <CollapsibleContent>
+                            <SidebarMenuSub>
+                              {visibleChildren.map((child) => (
+                                <SidebarMenuSubItem key={child.href}>
+                                  <SidebarMenuSubButton isActive={pathname === child.href} asChild>
+                                    <Link href={child.href}>
+                                      <span>{child.label}</span>
+                                    </Link>
+                                  </SidebarMenuSubButton>
+                                </SidebarMenuSubItem>
+                              ))}
+                            </SidebarMenuSub>
+                          </CollapsibleContent>
+                        </SidebarMenuItem>
+                      </Collapsible>
+                    );
+                  }
+
+                  return (
+                    <SidebarMenuItem key={link.href}>
+                      <SidebarMenuButton isActive={pathname.startsWith(link.href)} asChild>
+                        <Link href={link.href}>
+                          <link.icon className="size-4" />
+                          <span>{link.label}</span>
+                          {link.href === "/purchase-requests" &&
+                          pendingPurchaseRequestCount > 0 &&
+                          (roles.includes("ADMIN") || roles.includes("ACCOUNTANT")) ? (
+                            <span className="ml-auto rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                              {pendingPurchaseRequestCount}
+                            </span>
+                          ) : null}
+                          {link.href === "/transactions" && pendingAdjustmentCount > 0 && roles.includes("ADMIN") ? (
+                            <span className="ml-auto rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                              {pendingAdjustmentCount}
+                            </span>
+                          ) : null}
+                        </Link>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  );
+                })}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>

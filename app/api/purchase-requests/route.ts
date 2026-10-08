@@ -5,6 +5,8 @@ import { fail, forbidden, ok, unauthorized } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { mapReceiptStorageError, saveReceiptFiles } from "@/lib/receipt-storage";
 import { notifyPurchaseRequestSubmitted } from "@/lib/telegram";
+import { STAFF_ROLE_CODES } from "@/lib/roles";
+import { DIEU_AM_CATEGORY_BRANCH_CODE, categoryBranchWhere, isDieuAmRole } from "@/lib/dieu-am-scope";
 
 type TxClient = Omit<typeof prisma, "$connect" | "$disconnect" | "$on" | "$transaction" | "$extends">;
 
@@ -24,6 +26,10 @@ const createSchema = z.object({
   categoryId: z.string().min(1),
   expectedAmount: z.number().positive(),
   currencyCode: z.enum(["VND", "USD"]),
+  tags: z.array(z.string().trim().min(1).max(50)).max(20).optional().default([]),
+  workshopEmail: z.string().trim().max(191).optional(),
+  isWalletStock: z.boolean().optional().default(false),
+  walletOwnerId: z.preprocess((value) => (value === "" || value == null ? undefined : value), z.string().min(1).optional()),
   items: z
     .array(
       z.object({
@@ -39,6 +45,30 @@ const createSchema = z.object({
 function parseNumberInput(input: FormDataEntryValue | null) {
   const value = Number(String(input ?? ""));
   return Number.isFinite(value) ? value : NaN;
+}
+
+function normalizeTags(values: string[]) {
+  const seen = new Set<string>();
+  const tags: string[] = [];
+  for (const value of values) {
+    const tag = value.trim().replace(/\s+/g, " ").slice(0, 50);
+    const key = tag.toLowerCase();
+    if (!tag || seen.has(key)) continue;
+    seen.add(key);
+    tags.push(tag);
+  }
+  return tags;
+}
+
+// Tags live in a TEXT column as a JSON array so the list endpoint can hand the UI a plain string[].
+function parseStoredTags(raw: string | null) {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 async function parseCreateInput(
@@ -63,6 +93,10 @@ async function parseCreateInput(
       categoryId: String(formData.get("categoryId") ?? ""),
       expectedAmount: parseNumberInput(formData.get("expectedAmount")),
       currencyCode: String(formData.get("currencyCode") ?? ""),
+      tags: normalizeTags(formData.getAll("tags").map((value) => String(value))),
+      workshopEmail: String(formData.get("workshopEmail") ?? "").trim() || undefined,
+      isWalletStock: String(formData.get("isWalletStock") ?? "") === "true",
+      walletOwnerId: formData.get("walletOwnerId"),
       items: [],
     });
     if (!parsed.success) return null;
@@ -82,17 +116,23 @@ export async function GET() {
   }
 
   const canReadAll = auth.user.roles.includes("ADMIN") || auth.user.roles.includes("ACCOUNTANT");
+  const scopedToDieuAm = isDieuAmRole(auth.user.roles) && !canReadAll;
   const rows = await prisma.purchaseRequest.findMany({
-    where: canReadAll ? undefined : { requesterId: auth.user.id },
+    where: scopedToDieuAm
+      ? categoryBranchWhere(DIEU_AM_CATEGORY_BRANCH_CODE)
+      : canReadAll
+        ? undefined
+        : { requesterId: auth.user.id },
     include: {
       category: {
         include: {
           parent: {
-            select: { name: true },
+            select: { name: true, parent: { select: { name: true } } },
           },
         },
       },
       requester: { select: { id: true, fullName: true, email: true } },
+      walletOwner: { select: { id: true, fullName: true } },
       items: true,
       receiptImages: {
         orderBy: { createdAt: "desc" },
@@ -104,6 +144,18 @@ export async function GET() {
         },
       },
       approvals: { include: { actor: { select: { fullName: true } } }, orderBy: { actedAt: "desc" } },
+      currencyConversions: {
+        select: {
+          conversionId: true,
+          conversion: {
+            select: {
+              id: true,
+              status: true,
+              createdAt: true,
+            },
+          },
+        },
+      },
       transactions: {
         orderBy: { createdAt: "desc" },
         take: 1,
@@ -114,6 +166,7 @@ export async function GET() {
           currencyCode: true,
           description: true,
           notes: true,
+          transactionRef: true,
           creator: { select: { fullName: true } },
         },
       },
@@ -123,16 +176,24 @@ export async function GET() {
 
   const normalizedRows = rows.map((row: (typeof rows)[number]) => ({
     ...row,
+    tags: parseStoredTags(row.tags),
+    walletOwnerName: row.walletOwner?.fullName ?? null,
     category: row.category
       ? {
           ...row.category,
           parentName: row.category.parent?.name ?? null,
+          pathLabel: [row.category.parent?.parent?.name, row.category.parent?.name, row.category.name]
+            .filter(Boolean)
+            .join(" / "),
         }
       : null,
     receiptImages: row.receiptImages.map((image: (typeof row.receiptImages)[number]) => ({
       ...image,
       filePath: normalizeReceiptPath(image.filePath),
     })),
+    currencyConversionCount: row.currencyConversions.length,
+    currencyConversionStatus: row.currencyConversions[0]?.conversion.status ?? null,
+    currencyConversions: undefined,
   }));
 
   return ok({ rows: normalizedRows });
@@ -143,6 +204,9 @@ export async function POST(request: Request) {
   if ("error" in auth) {
     return auth.error === "UNAUTHORIZED" ? unauthorized() : forbidden();
   }
+  if (isDieuAmRole(auth.user.roles)) {
+    return forbidden();
+  }
 
   const parsedInput = await parseCreateInput(request);
   if (!parsedInput) {
@@ -152,9 +216,20 @@ export async function POST(request: Request) {
 
   const category = await prisma.transactionCategory.findFirst({
     where: { id: payload.categoryId, isActive: true },
+    include: {
+      _count: { select: { children: true } },
+      parent: { select: { id: true, parent: { select: { id: true } } } },
+    },
   });
   if (!category) {
     return fail("Danh mục không hợp lệ", 400);
+  }
+  if (!category.parent?.parent) {
+    return fail("Vui lòng chọn đúng danh mục cấp 3", 400);
+  }
+  // Only the deepest node of a branch can carry money, so totals never double-count a parent.
+  if (category._count.children > 0) {
+    return fail("Vui lòng chọn danh mục con ở cấp sâu nhất", 400);
   }
 
   const expectedCategoryType = payload.kind === "COLLECTION" ? "INCOME" : "EXPENSE";
@@ -178,7 +253,7 @@ export async function POST(request: Request) {
         status: "ACTIVE",
         roles: {
           some: {
-            role: { code: "EMPLOYEE" },
+            role: { code: { in: [...STAFF_ROLE_CODES] } },
           },
         },
         AND: [
@@ -206,6 +281,39 @@ export async function POST(request: Request) {
     requesterId = requester.id;
   }
 
+  // Wallet stock is only ever set by an Account member on their own purchase, so a forged
+  // request from any other role is ignored rather than trusted.
+  const callerIsAccount = auth.user.roles.includes("ACCOUNT");
+  const isWalletStock =
+    payload.kind === "PURCHASE" && payload.isWalletStock && callerIsAccount && requesterId === auth.user.id;
+
+  let walletOwnerId: string | null = null;
+  if (payload.walletOwnerId) {
+    if (payload.kind !== "PURCHASE") {
+      return fail("Chỉ yêu cầu mua mới gắn được ví Account", 400);
+    }
+    // Buying back from an Account wallet is a Feline-staff action; reject rather than drop
+    // the link silently, otherwise the refund would never be raised.
+    if (!auth.user.roles.includes("EMPLOYEE")) {
+      return fail("Chỉ nhân viên Feline mới gắn được yêu cầu vào ví Account", 403);
+    }
+    if (payload.walletOwnerId === requesterId) {
+      return fail("Không thể mua lại từ ví của chính mình", 400);
+    }
+    const walletOwner = await prisma.user.findFirst({
+      where: {
+        id: payload.walletOwnerId,
+        status: "ACTIVE",
+        roles: { some: { role: { code: "ACCOUNT" } } },
+      },
+      select: { id: true },
+    });
+    if (!walletOwner) {
+      return fail("Ví Account không hợp lệ", 400);
+    }
+    walletOwnerId = walletOwner.id;
+  }
+
   let savedFiles: Array<{ filePath: string; fileName: string; mimeType: string; size: number }> = [];
   try {
     savedFiles = await saveReceiptFiles(receiptFiles);
@@ -227,6 +335,10 @@ export async function POST(request: Request) {
         description: payload.description,
         expectedAmount: payload.expectedAmount,
         currencyCode: payload.currencyCode,
+        tags: payload.tags.length ? JSON.stringify(normalizeTags(payload.tags)) : null,
+        workshopEmail: payload.workshopEmail ?? null,
+        isWalletStock,
+        walletOwnerId,
         status: "PENDING_APPROVAL",
         ...(payload.items.length > 0
           ? {

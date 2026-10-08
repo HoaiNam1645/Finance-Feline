@@ -4,9 +4,12 @@ import { writeAuditLog } from "@/lib/audit";
 import { fail, forbidden, ok, unauthorized } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { getAccountantApprovalThresholdVnd } from "@/lib/settings";
+import { DIEU_AM_CATEGORY_BRANCH_CODE, isDieuAmRole } from "@/lib/dieu-am-scope";
 
 const schema = z.object({
   name: z.string().min(2),
+  note: z.string().trim().max(255).optional(),
+  contactEmail: z.string().trim().max(191).optional(),
   type: z.enum(["INCOME", "EXPENSE"]),
   parentId: z.preprocess((value) => (value === "" || value == null ? undefined : value), z.string().min(1).optional()),
 });
@@ -37,10 +40,14 @@ export async function GET(request: Request) {
     where: includeInactive ? undefined : { isActive: true },
     orderBy: [{ parentId: "asc" }, { name: "asc" }],
     include: {
+      // Two nested parents cover the whole tree: the hierarchy is capped at 3 levels.
       parent: {
         select: {
           id: true,
           name: true,
+          code: true,
+          parentId: true,
+          parent: { select: { id: true, name: true, code: true } },
         },
       },
       _count: {
@@ -51,22 +58,58 @@ export async function GET(request: Request) {
       },
     },
   });
-  const rows = rawRows.map((row: (typeof rawRows)[number]) => ({
-    id: row.id,
-    code: row.code,
-    name: row.name,
-    type: row.type,
-    parentId: row.parentId,
-    parentName: row.parent?.name ?? null,
-    isActive: row.isActive,
-    accountantApprovalThresholdVnd: row.accountantApprovalThresholdVnd,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-    transactionCount: row._count.transactions,
-    childCount: row._count.children,
-  }));
+  // Admins and accountants need the full catalog for reporting and maintenance. Staff
+  // only receive their operational branch, which also keeps legacy roots out of pickers.
+  const canSeeEveryBranch = auth.user.roles.includes("ADMIN") || auth.user.roles.includes("ACCOUNTANT");
+  const scopedToDieuAm = isDieuAmRole(auth.user.roles) && !canSeeEveryBranch;
+  const isWorkshopOnly =
+    auth.user.roles.includes("WORKSHOP") &&
+    !auth.user.roles.includes("EMPLOYEE") &&
+    !auth.user.roles.includes("ACCOUNT");
+  const visibleRootCode = canSeeEveryBranch || scopedToDieuAm ? null : isWorkshopOnly ? "SUPPLIER" : "FELINE";
 
-  return ok({ rows });
+  const rows = rawRows.map((row: (typeof rawRows)[number]) => {
+    const grandParent = row.parent?.parent ?? null;
+    const rootCode = grandParent?.code ?? row.parent?.code ?? row.code;
+    const ancestors = [grandParent?.name, row.parent?.name].filter((name): name is string => Boolean(name));
+    return {
+      id: row.id,
+      code: row.code,
+      name: row.name,
+      note: row.note,
+      contactEmail: row.contactEmail,
+      type: row.type,
+      parentId: row.parentId,
+      parentName: row.parent?.name ?? null,
+      parentCode: row.parent?.code ?? null,
+      grandParentCode: grandParent?.code ?? null,
+      rootId: grandParent?.id ?? row.parent?.id ?? row.id,
+      rootCode,
+      rootName: grandParent?.name ?? row.parent?.name ?? row.name,
+      level: ancestors.length + 1,
+      path: [...ancestors, row.name],
+      pathLabel: [...ancestors, row.name].join(" / "),
+      isActive: row.isActive,
+      accountantApprovalThresholdVnd: row.accountantApprovalThresholdVnd,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      transactionCount: row._count.transactions,
+      childCount: row._count.children,
+    };
+  });
+
+  const visibleRows = scopedToDieuAm
+    ? rows.filter(
+        (row) =>
+          row.code === DIEU_AM_CATEGORY_BRANCH_CODE ||
+          row.parentCode === DIEU_AM_CATEGORY_BRANCH_CODE ||
+          row.grandParentCode === DIEU_AM_CATEGORY_BRANCH_CODE
+      )
+    : visibleRootCode
+      ? rows.filter((row) => row.rootCode === visibleRootCode)
+      : rows;
+
+  return ok({ rows: visibleRows });
 }
 
 export async function POST(request: Request) {
@@ -92,16 +135,13 @@ export async function POST(request: Request) {
         id: parsed.data.parentId,
         isActive: true,
       },
-      select: { id: true, type: true, parentId: true },
+      select: { id: true, parentId: true, parent: { select: { parentId: true } } },
     });
     if (!parent) {
       return fail("Danh mục cha không hợp lệ", 400);
     }
-    if (parent.type !== parsed.data.type) {
-      return fail("Danh mục con phải cùng loại với danh mục cha", 400);
-    }
-    if (parent.parentId) {
-      return fail("Chỉ hỗ trợ 1 cấp danh mục con", 400);
+    if (parent.parent?.parentId) {
+      return fail("Chỉ hỗ trợ tối đa 3 cấp danh mục", 400);
     }
   }
 
@@ -135,6 +175,8 @@ export async function POST(request: Request) {
     data: {
       code: finalCode,
       name: normalizedName,
+      note: parsed.data.note?.trim() || null,
+      contactEmail: parsed.data.contactEmail?.trim() || null,
       type: parsed.data.type,
       parentId: parsed.data.parentId ?? null,
       accountantApprovalThresholdVnd: defaultThresholdVnd,

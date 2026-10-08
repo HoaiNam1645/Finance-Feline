@@ -42,9 +42,22 @@ enum TransactionAdjustmentStatus {
   REJECTED
 }
 
+enum CurrencyConversionStatus {
+  PENDING
+  FAILED
+  SUCCEEDED
+}
+
 enum PurchaseRequestKind {
   PURCHASE
   COLLECTION
+}
+
+enum ExternalReceivableStatus {
+  OPEN
+  PARTIAL
+  PAID
+  CANCELLED
 }
 
 model User {
@@ -57,11 +70,16 @@ model User {
   updatedAt        DateTime              @updatedAt @map("updated_at")
   roles            UserRole[]
   purchaseRequests PurchaseRequest[]
+  walletPurchaseRequests PurchaseRequest[] @relation("PurchaseRequestWalletOwner")
   approvals        PurchaseRequestApproval[]
   transactionsMade Transaction[]         @relation("TransactionCreatedBy")
   transactionsOk   Transaction[]         @relation("TransactionApprovedBy")
   transactionTeamLinks TransactionTeamUser[] @relation("TransactionTeamUser")
   receiptImages    ReceiptImage[]        @relation("ReceiptUploadedBy")
+  currencyConversions CurrencyConversion[] @relation("CurrencyConversionCreatedBy")
+  decidedCurrencyConversions CurrencyConversion[] @relation("CurrencyConversionDecidedBy")
+  externalReceivables ExternalReceivable[] @relation("ExternalReceivableCreatedBy")
+  externalReceivablePayments ExternalReceivablePayment[] @relation("ExternalReceivablePaymentCreatedBy")
   auditLogs        AuditLog[]
   requestedTransactionAdjustments TransactionAdjustment[] @relation("TransactionAdjustmentRequestedBy")
   approvedTransactionAdjustments  TransactionAdjustment[] @relation("TransactionAdjustmentApprovedBy")
@@ -112,6 +130,8 @@ model TransactionCategory {
   id                            String            @id @default(cuid())
   code                          String            @unique
   name                          String
+  note                          String?           @db.VarChar(255)
+  contactEmail                  String?           @map("contact_email") @db.VarChar(191)
   type                          TransactionType
   parentId                      String?           @map("parent_id")
   accountantApprovalThresholdVnd Int?              @map("accountant_approval_threshold_vnd")
@@ -135,6 +155,8 @@ model Currency {
   ratesTo     ExchangeRate[] @relation("RatesTo")
   transactions Transaction[]
   requests    PurchaseRequest[]
+  externalReceivables ExternalReceivable[]
+  externalReceivablePayments ExternalReceivablePayment[]
 
   @@map("currencies")
 }
@@ -149,6 +171,9 @@ model PaymentAccount {
   createdAt     DateTime      @default(now()) @map("created_at")
   updatedAt     DateTime      @updatedAt @map("updated_at")
   transactions  Transaction[]
+  currencyConversions CurrencyConversion[] @relation("CurrencyConversionWallet")
+  currencyConversionReceives CurrencyConversion[] @relation("CurrencyConversionReceive")
+  externalReceivablePayments ExternalReceivablePayment[]
 
   @@index([isActive, accountName])
   @@map("payment_accounts")
@@ -169,6 +194,78 @@ model ExchangeRate {
   @@map("exchange_rates")
 }
 
+model ExternalParty {
+  id           String               @id @default(cuid())
+  name         String
+  type         String               @default("OTHER")
+  contactName  String?              @map("contact_name") @db.VarChar(191)
+  contactPhone String?              @map("contact_phone") @db.VarChar(50)
+  contactEmail String?              @map("contact_email") @db.VarChar(191)
+  note         String?              @db.Text
+  isActive     Boolean              @default(true) @map("is_active")
+  createdAt    DateTime             @default(now()) @map("created_at")
+  updatedAt    DateTime             @updatedAt @map("updated_at")
+  receivables  ExternalReceivable[]
+
+  @@index([isActive, name])
+  @@map("external_parties")
+}
+
+model ExternalReceivable {
+  id                String                      @id @default(cuid())
+  partyId           String                      @map("party_id")
+  title             String
+  description       String?                     @db.Text
+  amountOriginal    Decimal                     @db.Decimal(20, 4) @map("amount_original")
+  currencyCode      String                      @map("currency_code")
+  exchangeRateToVnd Decimal                     @db.Decimal(20, 4) @map("exchange_rate_to_vnd")
+  amountVnd         Decimal                     @db.Decimal(20, 4) @map("amount_vnd")
+  occurredAt        DateTime                    @map("occurred_at")
+  dueDate           DateTime?                   @map("due_date")
+  status            ExternalReceivableStatus    @default(OPEN)
+  createdBy         String                      @map("created_by")
+  cancelledAt       DateTime?                   @map("cancelled_at")
+  createdAt         DateTime                    @default(now()) @map("created_at")
+  updatedAt         DateTime                    @updatedAt @map("updated_at")
+  party             ExternalParty               @relation(fields: [partyId], references: [id])
+  currency          Currency                    @relation(fields: [currencyCode], references: [code])
+  creator           User                        @relation("ExternalReceivableCreatedBy", fields: [createdBy], references: [id])
+  payments          ExternalReceivablePayment[]
+
+  @@index([partyId, status])
+  @@index([status, occurredAt])
+  @@index([createdBy])
+  @@map("external_receivables")
+}
+
+model ExternalReceivablePayment {
+  id                   String             @id @default(cuid())
+  receivableId         String             @map("receivable_id")
+  amountOriginal       Decimal            @db.Decimal(20, 4) @map("amount_original")
+  currencyCode         String             @map("currency_code")
+  exchangeRateToVnd    Decimal            @db.Decimal(20, 4) @map("exchange_rate_to_vnd")
+  amountVnd            Decimal            @db.Decimal(20, 4) @map("amount_vnd")
+  paymentDate          DateTime           @map("payment_date")
+  paymentAccountId     String?            @map("payment_account_id")
+  note                 String?            @db.Text
+  receiptImagePath     String?            @map("receipt_image_path") @db.VarChar(512)
+  receiptImageName     String?            @map("receipt_image_name") @db.VarChar(255)
+  receiptImageMimeType String?            @map("receipt_image_mime_type")
+  receiptImageSize     Int?               @map("receipt_image_size")
+  createdBy            String             @map("created_by")
+  createdAt            DateTime           @default(now()) @map("created_at")
+  updatedAt            DateTime           @updatedAt @map("updated_at")
+  receivable           ExternalReceivable @relation(fields: [receivableId], references: [id], onDelete: Cascade)
+  currency             Currency           @relation(fields: [currencyCode], references: [code])
+  paymentAccount       PaymentAccount?    @relation(fields: [paymentAccountId], references: [id], onDelete: SetNull)
+  creator              User               @relation("ExternalReceivablePaymentCreatedBy", fields: [createdBy], references: [id])
+
+  @@index([receivableId, paymentDate])
+  @@index([paymentAccountId])
+  @@index([createdBy])
+  @@map("external_receivable_payments")
+}
+
 model PurchaseRequest {
   id             String                  @id @default(cuid())
   requesterId    String                  @map("requester_id")
@@ -178,6 +275,13 @@ model PurchaseRequest {
   kind           PurchaseRequestKind     @default(PURCHASE)
   expectedAmount Decimal                 @db.Decimal(20, 4) @map("expected_amount")
   currencyCode   String                  @map("currency_code")
+  tags           String?                 @db.Text
+  workshopEmail  String?                 @map("workshop_email") @db.VarChar(191)
+  // Account wallet: an ACCOUNT member buys stock (isWalletStock), other staff buy it back
+  // (walletOwnerId), and the system raises a collection request that credits the wallet.
+  isWalletStock  Boolean                 @default(false) @map("is_wallet_stock")
+  walletOwnerId  String?                 @map("wallet_owner_id")
+  walletSourceRequestId String?          @map("wallet_source_request_id")
   status         PurchaseRequestStatus   @default(DRAFT)
   createdAt      DateTime                @default(now()) @map("created_at")
   updatedAt      DateTime                @updatedAt @map("updated_at")
@@ -188,11 +292,71 @@ model PurchaseRequest {
   approvals      PurchaseRequestApproval[]
   transactions   Transaction[]
   receiptImages  ReceiptImage[]
+  currencyConversions CurrencyConversionRequest[]
+  walletOwner    User?                   @relation("PurchaseRequestWalletOwner", fields: [walletOwnerId], references: [id], onDelete: SetNull)
+  walletSourceRequest   PurchaseRequest?  @relation("PurchaseRequestWalletSource", fields: [walletSourceRequestId], references: [id], onDelete: Cascade)
+  walletDerivedRequests PurchaseRequest[] @relation("PurchaseRequestWalletSource")
 
   @@index([requesterId, status])
+  @@index([walletOwnerId])
+  @@index([walletSourceRequestId])
   @@index([categoryId])
   @@index([kind, status])
   @@map("purchase_requests")
+}
+
+model CurrencyConversion {
+  id                    String                      @id @default(cuid())
+  walletPaymentAccountId String?                     @map("wallet_payment_account_id")
+  receivePaymentAccountId String?                    @map("receive_payment_account_id")
+  walletName            String                      @map("wallet_name")
+  bankName              String                      @map("bank_name")
+  accountNumber         String                      @map("account_number")
+  ownerName             String                      @map("owner_name")
+  amountUsd             Decimal                     @db.Decimal(20, 4) @map("amount_usd")
+  amountVnd             Decimal                     @db.Decimal(20, 4) @map("amount_vnd")
+  notes                 String?                     @db.Text
+  transferTransactionId String?                     @map("transfer_transaction_id") @db.VarChar(191)
+  receiveTransactionId  String?                     @map("receive_transaction_id") @db.VarChar(191)
+  pingpongImagePath     String                      @map("pingpong_image_path") @db.VarChar(512)
+  pingpongImageName     String                      @map("pingpong_image_name") @db.VarChar(255)
+  pingpongImageMimeType String                      @map("pingpong_image_mime_type")
+  pingpongImageSize     Int                         @map("pingpong_image_size")
+  transferImagePath     String?                     @map("transfer_image_path") @db.VarChar(512)
+  transferImageName     String?                     @map("transfer_image_name") @db.VarChar(255)
+  transferImageMimeType String?                     @map("transfer_image_mime_type")
+  transferImageSize     Int?                        @map("transfer_image_size")
+  status                CurrencyConversionStatus    @default(PENDING)
+  createdBy             String                      @map("created_by")
+  decidedBy             String?                     @map("decided_by")
+  decidedAt             DateTime?                   @map("decided_at")
+  createdAt             DateTime                    @default(now()) @map("created_at")
+  updatedAt             DateTime                    @updatedAt @map("updated_at")
+  walletPaymentAccount  PaymentAccount?             @relation("CurrencyConversionWallet", fields: [walletPaymentAccountId], references: [id], onDelete: SetNull)
+  receivePaymentAccount PaymentAccount?             @relation("CurrencyConversionReceive", fields: [receivePaymentAccountId], references: [id], onDelete: SetNull)
+  creator               User                        @relation("CurrencyConversionCreatedBy", fields: [createdBy], references: [id])
+  decider               User?                       @relation("CurrencyConversionDecidedBy", fields: [decidedBy], references: [id], onDelete: SetNull)
+  requests              CurrencyConversionRequest[]
+
+  @@index([status, createdAt])
+  @@index([createdAt])
+  @@index([createdBy])
+  @@index([decidedBy])
+  @@index([walletPaymentAccountId])
+  @@index([receivePaymentAccountId])
+  @@map("currency_conversions")
+}
+
+model CurrencyConversionRequest {
+  conversionId      String             @map("conversion_id")
+  purchaseRequestId String             @map("purchase_request_id")
+  conversion        CurrencyConversion @relation(fields: [conversionId], references: [id], onDelete: Cascade)
+  purchaseRequest   PurchaseRequest    @relation(fields: [purchaseRequestId], references: [id], onDelete: Cascade)
+
+  @@id([conversionId, purchaseRequestId])
+  @@unique([purchaseRequestId])
+  @@index([purchaseRequestId])
+  @@map("currency_conversion_requests")
 }
 
 model PurchaseRequestItem {
@@ -232,6 +396,8 @@ model Transaction {
   amountVnd          Decimal              @db.Decimal(20, 4) @map("amount_vnd")
   description        String
   notes              Json?
+  transactionRef     String?              @map("transaction_ref") @db.VarChar(191)
+  workshopEmail      String?              @map("workshop_email") @db.VarChar(191)
   transactionDate    DateTime             @map("transaction_date")
   paymentMethod      String               @map("payment_method")
   paymentAccountId   String?              @map("payment_account_id")

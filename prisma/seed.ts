@@ -95,6 +95,9 @@ async function main() {
       "category.manage",
     ],
     EMPLOYEE: ["request.create", "request.submit", "request.read.own"],
+    WORKSHOP: ["request.create", "request.submit", "request.read.own"],
+    ACCOUNT: ["request.create", "request.submit", "request.read.own"],
+    DIEU_AM: ["request.read.all", "transaction.read"],
   } as const;
 
   for (const [code, codes] of Object.entries(roles)) {

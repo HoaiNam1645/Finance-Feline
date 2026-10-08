@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import { Button } from "@/components/ui/button";
+import { snapshotFiles } from "@/lib/snapshot-file";
 
 type ReceiptImageUploaderProps = {
   files: File[];
@@ -40,9 +41,9 @@ export function ReceiptImageUploader({
     };
   }, [previews]);
 
-  function appendFiles(nextFiles: File[]) {
+  async function appendFiles(nextFiles: File[]) {
     if (!nextFiles.length) return;
-    const imageFiles = nextFiles.filter((file) => file.type.startsWith("image/"));
+    const imageFiles = await snapshotFiles(nextFiles.filter((file) => file.type.startsWith("image/")));
     if (!imageFiles.length) return;
 
     const existingKeys = new Set(files.map((file) => fileKey(file)));
@@ -70,7 +71,7 @@ export function ReceiptImageUploader({
         className="hidden"
         disabled={disabled}
         onChange={(event) => {
-          appendFiles(Array.from(event.currentTarget.files ?? []));
+          void appendFiles(Array.from(event.currentTarget.files ?? []));
           event.currentTarget.value = "";
         }}
       />
@@ -103,7 +104,7 @@ export function ReceiptImageUploader({
             .filter((item) => item.kind === "file")
             .map((item) => item.getAsFile())
             .filter((item): item is File => Boolean(item));
-          appendFiles(pasted);
+          void appendFiles(pasted);
         }}
         className="rounded-md border border-dashed p-3 text-xs text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >

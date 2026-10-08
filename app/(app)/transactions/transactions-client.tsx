@@ -3,17 +3,19 @@
 import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ArrowUpDown, CalendarIcon, Check, ChevronRight, Loader2 } from "lucide-react";
+import { ArrowUpDown, CalendarIcon, Check, Loader2 } from "lucide-react";
 import { type DateRange } from "react-day-picker";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ReceiptImageUploader } from "@/components/app/receipt-image-uploader";
+import { CategoryPickerTree } from "@/components/app/category-picker-tree";
+import { buildCategoryTree, collectSelectableCategories, isStructuredCategory } from "@/lib/category-tree";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -37,6 +39,8 @@ type Transaction = {
   currencyCode: "VND" | "USD";
   description: string;
   notes?: TransactionNote[];
+  transactionRef?: string | null;
+  workshopEmail?: string | null;
   transactionDate: string;
   createdAt: string;
   updatedAt: string;
@@ -206,12 +210,18 @@ function directionLabel(value: "IN" | "OUT" | null | undefined) {
 type Category = {
   id: string;
   name: string;
+  note?: string | null;
+  rootCode?: string | null;
+  contactEmail?: string | null;
   type: "INCOME" | "EXPENSE";
   parentId?: string | null;
   parentName?: string | null;
+  level?: number;
+  pathLabel?: string;
 };
 
-function categoryDisplayName(category: Pick<Category, "name" | "parentName">) {
+function categoryDisplayName(category: Pick<Category, "name" | "parentName"> & { pathLabel?: string }) {
+  if (category.pathLabel) return category.pathLabel;
   return category.parentName ? `${category.parentName} / ${category.name}` : category.name;
 }
 
@@ -561,8 +571,9 @@ export default function TransactionsPage() {
   const [createPaymentAccountId, setCreatePaymentAccountId] = useState("");
   const [createDirection, setCreateDirection] = useState<CreateDirection>("OUT");
   const [createCategoryId, setCreateCategoryId] = useState("");
+  const [createTransactionRef, setCreateTransactionRef] = useState("");
+  const [createWorkshopEmail, setCreateWorkshopEmail] = useState("");
   const [createCategoryPickerOpen, setCreateCategoryPickerOpen] = useState(false);
-  const [expandedCreateCategoryParents, setExpandedCreateCategoryParents] = useState<string[]>([]);
   const [createAmountInput, setCreateAmountInput] = useState("");
   const [createCurrencyCode, setCreateCurrencyCode] = useState<"VND" | "USD">("VND");
   const [createDescription, setCreateDescription] = useState("");
@@ -629,12 +640,18 @@ export default function TransactionsPage() {
   const [reviewingAdjustmentId, setReviewingAdjustmentId] = useState<string | null>(null);
   const [adjustmentReviewModal, setAdjustmentReviewModal] = useState<TransactionAdjustment | null>(null);
   const [adjustingRow, setAdjustingRow] = useState<Transaction | null>(null);
+  const [refEditingRow, setRefEditingRow] = useState<Transaction | null>(null);
+  const [refInput, setRefInput] = useState("");
+  const [savingRef, setSavingRef] = useState(false);
+  const [categoryEditingRow, setCategoryEditingRow] = useState<Transaction | null>(null);
+  const [savingCategory, setSavingCategory] = useState(false);
   const [adjustmentHistory, setAdjustmentHistory] = useState<TransactionAdjustment[]>([]);
   const [adjustmentHistoryLoading, setAdjustmentHistoryLoading] = useState(false);
   const [adjustReason, setAdjustReason] = useState("");
   const [adjustTeamUserIds, setAdjustTeamUserIds] = useState<string[]>([]);
   const [adjustPaymentAccountId, setAdjustPaymentAccountId] = useState("");
   const [adjustCategoryId, setAdjustCategoryId] = useState("");
+  const [adjustCategoryPickerOpen, setAdjustCategoryPickerOpen] = useState(false);
   const [adjustAmountInput, setAdjustAmountInput] = useState("");
   const [adjustCurrencyCode, setAdjustCurrencyCode] = useState<"VND" | "USD">("VND");
   const [adjustDescription, setAdjustDescription] = useState("");
@@ -660,33 +677,32 @@ export default function TransactionsPage() {
     Number.isFinite(createAmountValue) && createAmountValue >= 0
       ? amountToWords(createAmountValue, createCurrencyCode)
       : "";
-  const filteredCreateCategories = useMemo(() => {
-    if (createDirection === "IN") return categories.filter((category) => category.type === "INCOME");
-    return categories.filter((category) => category.type === "EXPENSE");
-  }, [categories, createDirection]);
+  // Only the structured trees are offered for new transactions; legacy categories stay
+  // visible on existing records and in the filters, but can no longer be picked.
+  const createCategoryTree = useMemo(
+    () => buildCategoryTree(categories.filter(isStructuredCategory), createDirection === "IN" ? "INCOME" : "EXPENSE"),
+    [categories, createDirection]
+  );
+  const filteredCreateCategories = useMemo(
+    () => collectSelectableCategories(createCategoryTree),
+    [createCategoryTree]
+  );
+  const adjustCategoryTree = useMemo(
+    () => buildCategoryTree(categories, adjustingRow?.direction === "IN" ? "INCOME" : "EXPENSE"),
+    [categories, adjustingRow]
+  );
+  const adjustSelectedCategory = useMemo(
+    () => categories.find((category) => category.id === adjustCategoryId) ?? null,
+    [categories, adjustCategoryId]
+  );
   const selectedCreateCategory = useMemo(
     () => filteredCreateCategories.find((category) => category.id === createCategoryId) ?? null,
     [filteredCreateCategories, createCategoryId]
   );
-  const createCategoryGroups = useMemo(() => {
-    const parents = filteredCreateCategories
-      .filter((category) => !category.parentId)
-      .toSorted((a, b) => categoryDisplayName(a).localeCompare(categoryDisplayName(b), "vi"));
-    const childrenByParentId = new Map<string, Category[]>();
-    for (const category of filteredCreateCategories) {
-      if (!category.parentId) continue;
-      const current = childrenByParentId.get(category.parentId) ?? [];
-      current.push(category);
-      childrenByParentId.set(category.parentId, current);
-    }
-    for (const [parentId, children] of childrenByParentId.entries()) {
-      childrenByParentId.set(
-        parentId,
-        children.toSorted((a, b) => categoryDisplayName(a).localeCompare(categoryDisplayName(b), "vi"))
-      );
-    }
-    return { parents, childrenByParentId };
-  }, [filteredCreateCategories]);
+  // Picking a workshop pre-fills its email; the user can still correct it before saving.
+  useEffect(() => {
+    setCreateWorkshopEmail(selectedCreateCategory?.contactEmail ?? "");
+  }, [selectedCreateCategory]);
 
   const appliedPageRaw = Number(searchParams.get("page") ?? "1");
   const appliedPage = Number.isFinite(appliedPageRaw) && appliedPageRaw > 0 ? Math.floor(appliedPageRaw) : 1;
@@ -1008,6 +1024,12 @@ export default function TransactionsPage() {
       if (createPaymentAccountId) {
         formData.append("paymentAccountId", createPaymentAccountId);
       }
+      if (createTransactionRef.trim()) {
+        formData.append("transactionRef", createTransactionRef.trim());
+      }
+      if (createWorkshopEmail.trim()) {
+        formData.append("workshopEmail", createWorkshopEmail.trim());
+      }
       formData.append("amountOriginal", String(amountOriginal));
       formData.append("currencyCode", createCurrencyCode);
       formData.append("description", createDescription.trim());
@@ -1034,6 +1056,8 @@ export default function TransactionsPage() {
       setCreatePaymentAccountId("");
       setCreateDirection("OUT");
       setCreateCategoryId("");
+      setCreateTransactionRef("");
+      setCreateWorkshopEmail("");
       setCreateAmountInput("");
       setCreateCurrencyCode("VND");
       setCreateDescription("");
@@ -1042,6 +1066,50 @@ export default function TransactionsPage() {
       await refreshRows();
     } finally {
       setCreating(false);
+    }
+  }
+
+  async function saveTransactionRef() {
+    if (!refEditingRow) return;
+    setSavingRef(true);
+    try {
+      const response = await fetch(`/api/transactions/${encodeURIComponent(refEditingRow.id)}/reference`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transactionRef: refInput.trim() }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        toast.error(data.error ?? "Cập nhật Transaction ID thất bại");
+        return;
+      }
+      toast.success("Đã cập nhật Transaction ID");
+      setRefEditingRow(null);
+      await refreshRows();
+    } finally {
+      setSavingRef(false);
+    }
+  }
+
+  async function saveTransactionCategory(categoryId: string) {
+    if (!categoryEditingRow) return;
+    setSavingCategory(true);
+    try {
+      const response = await fetch(`/api/transactions/${encodeURIComponent(categoryEditingRow.id)}/category`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ categoryId }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        toast.error(data.error ?? "Đổi danh mục thất bại");
+        return;
+      }
+      toast.success("Đã đổi danh mục");
+      setCategoryEditingRow(null);
+      await refreshRows();
+    } finally {
+      setSavingCategory(false);
     }
   }
 
@@ -1318,6 +1386,8 @@ export default function TransactionsPage() {
     const header = [
       "STT",
       "Ma giao dich",
+      "Transaction ID",
+      "Email xuong",
       "Ngay giao dich",
       "Ngay tao",
       "Ngay cap nhat",
@@ -1369,6 +1439,8 @@ export default function TransactionsPage() {
       const values = [
         String(index + 1),
         row.id,
+        row.transactionRef ?? "-",
+        row.workshopEmail ?? "-",
         new Date(row.transactionDate).toLocaleString("vi-VN"),
         new Date(row.createdAt).toLocaleString("vi-VN"),
         new Date(row.updatedAt).toLocaleString("vi-VN"),
@@ -1573,7 +1645,7 @@ export default function TransactionsPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">
-            <div className="flex flex-wrap items-end gap-2">
+            <div className="flex flex-wrap items-end gap-2 [&>div]:w-full sm:[&>div]:w-auto">
               <div className="space-y-1">
                 <Label className="text-xs text-muted-foreground">Kỳ lọc</Label>
                 <Select
@@ -1586,7 +1658,7 @@ export default function TransactionsPage() {
                     setDraftDateRange(range);
                   }}
                 >
-                  <SelectTrigger className="w-[140px]">
+                  <SelectTrigger className="w-full sm:w-[140px]">
                     <SelectValue placeholder="Kỳ lọc nhanh" />
                   </SelectTrigger>
                   <SelectContent>
@@ -1603,7 +1675,7 @@ export default function TransactionsPage() {
                 <Label className="text-xs text-muted-foreground">Khoảng ngày</Label>
                 <Popover>
                   <PopoverTrigger asChild>
-                    <Button type="button" variant="outline" className="w-[250px] justify-start text-left font-normal">
+                    <Button type="button" variant="outline" className="w-full sm:w-[250px] justify-start text-left font-normal">
                       <CalendarIcon className="mr-2 size-4" />
                       {draftDateRange?.from
                         ? `${draftDateRange.from.toLocaleDateString("vi-VN")} - ${
@@ -1636,7 +1708,7 @@ export default function TransactionsPage() {
               <div className="space-y-1">
                 <Label className="text-xs text-muted-foreground">Nhân viên</Label>
                 <Select value={draftTeamUserId} onValueChange={setDraftTeamUserId}>
-                  <SelectTrigger className="w-[180px]">
+                  <SelectTrigger className="w-full sm:w-[180px]">
                     <SelectValue placeholder="Nhan vien" />
                   </SelectTrigger>
                   <SelectContent>
@@ -1653,7 +1725,7 @@ export default function TransactionsPage() {
               <div className="space-y-1">
                 <Label className="text-xs text-muted-foreground">Loại giao dịch</Label>
                 <Select value={draftDirection} onValueChange={(value) => setDraftDirection(value as DirectionFilter)}>
-                  <SelectTrigger className="w-[140px]">
+                  <SelectTrigger className="w-full sm:w-[140px]">
                     <SelectValue placeholder="Loại giao dịch" />
                   </SelectTrigger>
                   <SelectContent>
@@ -1666,7 +1738,7 @@ export default function TransactionsPage() {
               <div className="space-y-1">
                 <Label className="text-xs text-muted-foreground">Danh mục</Label>
                 <Select value={draftCategoryId} onValueChange={setDraftCategoryId}>
-                  <SelectTrigger className="w-[190px]">
+                  <SelectTrigger className="w-full sm:w-[190px]">
                     <SelectValue placeholder="Danh mục" />
                   </SelectTrigger>
                   <SelectContent>
@@ -1682,7 +1754,7 @@ export default function TransactionsPage() {
               <div className="space-y-1">
                 <Label className="text-xs text-muted-foreground">Có điều chỉnh</Label>
                 <Select value={draftAdjusted} onValueChange={(value) => setDraftAdjusted(value as AdjustedFilter)}>
-                  <SelectTrigger className="w-[170px]">
+                  <SelectTrigger className="w-full sm:w-[170px]">
                     <SelectValue placeholder="Trạng thái điều chỉnh" />
                   </SelectTrigger>
                   <SelectContent>
@@ -1698,7 +1770,7 @@ export default function TransactionsPage() {
                   value={draftAdjustmentStatus}
                   onValueChange={(value) => setDraftAdjustmentStatus(value as AdjustmentStatusFilter)}
                 >
-                  <SelectTrigger className="w-[180px]">
+                  <SelectTrigger className="w-full sm:w-[180px]">
                     <SelectValue placeholder="Duyệt điều chỉnh" />
                   </SelectTrigger>
                   <SelectContent>
@@ -1713,7 +1785,7 @@ export default function TransactionsPage() {
               <div className="space-y-1">
                 <Label className="text-xs text-muted-foreground">Tài khoản thanh toán</Label>
                 <Select value={draftPaymentAccountId} onValueChange={setDraftPaymentAccountId}>
-                  <SelectTrigger className="w-[220px]">
+                  <SelectTrigger className="w-full sm:w-[220px]">
                     <SelectValue placeholder="Tài khoản thanh toán" />
                   </SelectTrigger>
                   <SelectContent>
@@ -1774,6 +1846,7 @@ export default function TransactionsPage() {
                 <TableHead>Người tạo</TableHead>
                 <TableHead>User Team</TableHead>
                 <TableHead>Tài Khoản</TableHead>
+                <TableHead className="min-w-[150px]">Transaction ID</TableHead>
                 <TableHead>Category</TableHead>
                 <TableHead className="min-w-[360px]">Mô tả</TableHead>
                 <TableHead>Cập nhật lần cuối</TableHead>
@@ -1801,7 +1874,35 @@ export default function TransactionsPage() {
                       ? `${row.paymentAccount.accountName} - ${row.paymentAccount.bankName}`
                       : "-"}
                   </TableCell>
-                  <TableCell>{categoryDisplayName(row.category)}</TableCell>
+                  <TableCell className="min-w-[150px]">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className={`h-auto justify-start p-1 text-left font-normal ${
+                        row.transactionRef ? "" : "text-muted-foreground italic"
+                      }`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setRefEditingRow(row);
+                        setRefInput(row.transactionRef ?? "");
+                      }}
+                    >
+                      {row.transactionRef || "Bổ sung"}
+                    </Button>
+                  </TableCell>
+                  <TableCell>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="h-auto justify-start p-1 text-left font-normal"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setCategoryEditingRow(row);
+                      }}
+                    >
+                      {categoryDisplayName(row.category)}
+                    </Button>
+                  </TableCell>
                   <TableCell className="min-w-[360px] whitespace-pre-line">{row.description}</TableCell>
                   <TableCell>{new Date(row.updatedAt).toLocaleString("vi-VN")}</TableCell>
                   <TableCell className="min-w-[170px]">
@@ -2398,18 +2499,17 @@ export default function TransactionsPage() {
                 </div>
                 <div className="grid gap-2">
                   <Label>Danh mục</Label>
-                  <Select value={adjustCategoryId} onValueChange={setAdjustCategoryId}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Chọn danh mục" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {categories.map((category) => (
-                        <SelectItem key={category.id} value={category.id}>
-                          {categoryDisplayName(category)}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full justify-start text-left font-normal"
+                    onClick={() => setAdjustCategoryPickerOpen(true)}
+                  >
+                    {adjustSelectedCategory ? categoryDisplayName(adjustSelectedCategory) : "Chọn danh mục"}
+                  </Button>
+                  <p className="text-xs text-muted-foreground">
+                    Chỉ chọn được danh mục ở tầng sâu nhất, loại {adjustingRow.direction === "IN" ? "Thu" : "Chi"}.
+                  </p>
                 </div>
                 <div className="grid gap-2">
                   <Label>Số tiền</Label>
@@ -2566,6 +2666,17 @@ export default function TransactionsPage() {
             </div>
 
             <div className="grid gap-2">
+              <Label htmlFor="create-transaction-ref">Transaction ID (không bắt buộc)</Label>
+              <Input
+                id="create-transaction-ref"
+                value={createTransactionRef}
+                onChange={(event) => setCreateTransactionRef(event.target.value)}
+                disabled={creating}
+                placeholder="Mã giao dịch ngân hàng"
+              />
+            </div>
+
+            <div className="grid gap-2">
               <Label>Loại giao dịch</Label>
               <Select
                 value={createDirection}
@@ -2598,6 +2709,24 @@ export default function TransactionsPage() {
                 </p>
               ) : null}
             </div>
+
+            {selectedCreateCategory?.contactEmail || createWorkshopEmail ? (
+              <div className="grid gap-2">
+                <Label htmlFor="create-workshop-email">Email xưởng</Label>
+                <Input
+                  id="create-workshop-email"
+                  type="email"
+                  value={createWorkshopEmail}
+                  onChange={(event) => setCreateWorkshopEmail(event.target.value)}
+                  disabled={creating}
+                  placeholder="Email của xưởng"
+                />
+                <p className="text-xs text-muted-foreground">Tự điền theo xưởng đã chọn, sửa được nếu cần.</p>
+              </div>
+            ) : (
+              <div className="hidden" />
+            )}
+
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="grid gap-2">
@@ -2676,80 +2805,128 @@ export default function TransactionsPage() {
         </DialogContent>
       </Dialog>
 
+      <Dialog open={Boolean(refEditingRow)} onOpenChange={(open) => !open && setRefEditingRow(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Transaction ID</DialogTitle>
+            <DialogDescription>
+              Mã giao dịch ngân hàng của khoản chi/thu này. Để trống nếu muốn xóa.
+            </DialogDescription>
+          </DialogHeader>
+          {refEditingRow ? (
+            <div className="space-y-3">
+              <div className="rounded-md border bg-muted/40 p-3 text-sm">
+                <p className="font-medium">{refEditingRow.description}</p>
+                <p className="text-xs text-muted-foreground">
+                  {new Date(refEditingRow.transactionDate).toLocaleString("vi-VN")}
+                </p>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="transaction-ref-input">Mã giao dịch</Label>
+                <Input
+                  id="transaction-ref-input"
+                  value={refInput}
+                  onChange={(event) => setRefInput(event.target.value)}
+                  placeholder="Ví dụ: FT26123456789"
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter") return;
+                    event.preventDefault();
+                    void saveTransactionRef();
+                  }}
+                />
+              </div>
+            </div>
+          ) : null}
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={() => setRefEditingRow(null)}>
+              Hủy
+            </Button>
+            <Button type="button" disabled={savingRef} onClick={() => void saveTransactionRef()}>
+              {savingRef ? "Đang lưu..." : "Lưu"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(categoryEditingRow)} onOpenChange={(open) => !open && setCategoryEditingRow(null)}>
+        <DialogContent className="overflow-y-auto sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Đổi danh mục</DialogTitle>
+            <DialogDescription>
+              Áp dụng ngay, không cần duyệt. Chỉ chọn được danh mục ở tầng sâu nhất, loại{" "}
+              {categoryEditingRow?.direction === "IN" ? "Thu" : "Chi"}.
+            </DialogDescription>
+          </DialogHeader>
+          {categoryEditingRow ? (
+            <div className="space-y-3">
+              <div className="rounded-md border bg-muted/40 p-3 text-sm">
+                <p className="font-medium">{categoryEditingRow.description}</p>
+                <p className="text-xs text-muted-foreground">
+                  Đang thuộc: {categoryDisplayName(categoryEditingRow.category)}
+                </p>
+              </div>
+              <div className="max-h-[50vh] overflow-y-auto">
+                <CategoryPickerTree
+                  nodes={buildCategoryTree(categories, categoryEditingRow.direction === "IN" ? "INCOME" : "EXPENSE")}
+                  selectedId={categoryEditingRow.category.id}
+                  onSelect={(nextId) => void saveTransactionCategory(nextId)}
+                  emptyLabel="Không có danh mục phù hợp."
+                />
+              </div>
+              {savingCategory ? <p className="text-sm text-muted-foreground">Đang lưu...</p> : null}
+            </div>
+          ) : null}
+          <div className="flex justify-end">
+            <Button type="button" variant="outline" onClick={() => setCategoryEditingRow(null)}>
+              Đóng
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={adjustCategoryPickerOpen} onOpenChange={setAdjustCategoryPickerOpen}>
+        <DialogContent className="overflow-y-auto sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Chọn danh mục</DialogTitle>
+            <DialogDescription>
+              Danh mục loại {adjustingRow?.direction === "IN" ? "Thu" : "Chi"}, chỉ chọn được ở tầng sâu nhất.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[60vh] overflow-y-auto">
+            <CategoryPickerTree
+              nodes={adjustCategoryTree}
+              selectedId={adjustCategoryId}
+              onSelect={(nextId) => {
+                setAdjustCategoryId(nextId);
+                setAdjustCategoryPickerOpen(false);
+              }}
+              emptyLabel="Không có danh mục phù hợp."
+            />
+          </div>
+          <div className="flex justify-end">
+            <Button type="button" variant="outline" onClick={() => setAdjustCategoryPickerOpen(false)}>
+              Đóng
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={createCategoryPickerOpen} onOpenChange={setCreateCategoryPickerOpen}>
-        <DialogContent className="max-h-[85vh] overflow-hidden sm:max-w-4xl">
+        <DialogContent className="overflow-y-auto sm:max-w-4xl">
           <DialogHeader>
             <DialogTitle>Chọn danh mục</DialogTitle>
           </DialogHeader>
-          {!filteredCreateCategories.length ? (
-            <p className="text-sm text-muted-foreground">
-              Không có danh mục cho loại {createDirection === "IN" ? "Thu" : "Chi"}.
-            </p>
-          ) : (
-            <ul className="max-h-[60vh] overflow-y-auto divide-y rounded-md border">
-              {createCategoryGroups.parents.map((parent) => {
-                const children = createCategoryGroups.childrenByParentId.get(parent.id) ?? [];
-                const expanded = expandedCreateCategoryParents.includes(parent.id);
-                const selectedParent = parent.id === createCategoryId;
-                return (
-                  <li key={parent.id} className="py-1">
-                    <div className="flex items-center gap-1 px-2">
-                      <button
-                        type="button"
-                        className={`flex-1 rounded px-2 py-1.5 text-left text-sm transition ${
-                          selectedParent ? "font-semibold text-primary" : "hover:bg-muted"
-                        }`}
-                        onClick={() => {
-                          setCreateCategoryId(parent.id);
-                          setCreateCategoryPickerOpen(false);
-                        }}
-                      >
-                        {categoryDisplayName(parent)}
-                      </button>
-                      {children.length > 0 ? (
-                        <Button
-                          type="button"
-                          size="icon-xs"
-                          variant="ghost"
-                          aria-label="Mở danh mục con"
-                          onClick={() =>
-                            setExpandedCreateCategoryParents((prev) =>
-                              prev.includes(parent.id) ? prev.filter((id) => id !== parent.id) : [...prev, parent.id]
-                            )
-                          }
-                        >
-                          <ChevronRight className={`size-4 transition-transform ${expanded ? "rotate-90" : ""}`} />
-                        </Button>
-                      ) : null}
-                    </div>
-                    {children.length > 0 && expanded ? (
-                      <ul className="mt-1 space-y-0.5 pl-8 pr-2">
-                        {children.map((child) => {
-                          const selectedChild = child.id === createCategoryId;
-                          return (
-                            <li key={child.id}>
-                              <button
-                                type="button"
-                                className={`w-full rounded px-2 py-1 text-left text-sm transition ${
-                                  selectedChild ? "font-semibold text-primary" : "hover:bg-muted"
-                                }`}
-                                onClick={() => {
-                                  setCreateCategoryId(child.id);
-                                  setCreateCategoryPickerOpen(false);
-                                }}
-                              >
-                                {categoryDisplayName(child)}
-                              </button>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    ) : null}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
+          <div className="max-h-[60vh] overflow-y-auto">
+            <CategoryPickerTree
+              nodes={createCategoryTree}
+              selectedId={createCategoryId}
+              onSelect={(nextId) => {
+                setCreateCategoryId(nextId);
+                setCreateCategoryPickerOpen(false);
+              }}
+              emptyLabel={`Không có danh mục cho loại ${createDirection === "IN" ? "Thu" : "Chi"}.`}
+            />
+          </div>
           <div className="flex justify-end">
             <Button type="button" variant="outline" onClick={() => setCreateCategoryPickerOpen(false)}>
               Đóng

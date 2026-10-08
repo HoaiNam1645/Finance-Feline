@@ -1,10 +1,12 @@
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 import { requireApiUser } from "@/lib/api-auth";
 import { writeAuditLog } from "@/lib/audit";
 import { env } from "@/lib/env";
 import { fail, forbidden, ok, unauthorized } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { mapReceiptStorageError, saveReceiptFiles } from "@/lib/receipt-storage";
+import { DIEU_AM_CATEGORY_BRANCH_CODE, categoryBranchWhere, isDieuAmRole } from "@/lib/dieu-am-scope";
 type TxClient = Omit<typeof prisma, "$connect" | "$disconnect" | "$on" | "$transaction" | "$extends">;
 type TransactionNote = {
   id: string;
@@ -55,6 +57,8 @@ const schema = z.object({
   amountOriginal: z.number().positive(),
   currencyCode: z.enum(["VND", "USD"]),
   description: z.string().min(3),
+  transactionRef: z.string().trim().max(191).optional(),
+  workshopEmail: z.string().trim().max(191).optional(),
   transactionDate: z.string().datetime().optional(),
 });
 
@@ -90,6 +94,8 @@ async function parseCreateInput(request: Request): Promise<{ payload: CreatePayl
       amountOriginal: parseNumberInput(formData.get("amountOriginal")),
       currencyCode: String(formData.get("currencyCode") ?? ""),
       description: String(formData.get("description") ?? ""),
+      transactionRef: String(formData.get("transactionRef") ?? "").trim() || undefined,
+      workshopEmail: String(formData.get("workshopEmail") ?? "").trim() || undefined,
       transactionDate: formData.get("transactionDate") ? String(formData.get("transactionDate")) : undefined,
     });
     if (!parsed.success) return null;
@@ -108,6 +114,7 @@ export async function GET(request: Request) {
     return auth.error === "UNAUTHORIZED" ? unauthorized() : forbidden();
   }
   const canReadAllTransactions = auth.user.roles.includes("ADMIN") || auth.user.roles.includes("ACCOUNTANT");
+  const scopedToDieuAm = isDieuAmRole(auth.user.roles) && !canReadAllTransactions;
 
   const { searchParams } = new URL(request.url);
   const fromParam = searchParams.get("from");
@@ -123,7 +130,7 @@ export async function GET(request: Request) {
   const toDate = toParam ? new Date(`${toParam}T23:59:59.999`) : null;
   const hasFromDate = Boolean(fromDate && !Number.isNaN(fromDate.getTime()));
   const hasToDate = Boolean(toDate && !Number.isNaN(toDate.getTime()));
-  const where = {
+  const where: Prisma.TransactionWhereInput = {
     ...(hasFromDate || hasToDate
       ? {
           transactionDate: {
@@ -133,7 +140,9 @@ export async function GET(request: Request) {
         }
       : {}),
     ...(directionParam === "IN" || directionParam === "OUT" ? { direction: directionParam } : {}),
-    ...(canReadAllTransactions
+    ...(scopedToDieuAm
+      ? {}
+      : canReadAllTransactions
       ? teamUserIdParam && teamUserIdParam !== "__ALL__"
         ? teamUserIdParam === "__UNASSIGNED__"
           ? { teamUsers: { none: {} } }
@@ -141,6 +150,7 @@ export async function GET(request: Request) {
         : {}
       : { teamUsers: { some: { userId: auth.user.id } } }),
     ...(categoryIdParam && categoryIdParam !== "__ALL__" ? { categoryId: categoryIdParam } : {}),
+    ...(scopedToDieuAm ? { AND: [categoryBranchWhere(DIEU_AM_CATEGORY_BRANCH_CODE)] } : {}),
     ...(paymentAccountIdParam && paymentAccountIdParam !== "__ALL__"
       ? paymentAccountIdParam === "__NONE__"
         ? { paymentAccountId: null }
@@ -156,13 +166,14 @@ export async function GET(request: Request) {
           OR: [
             { description: { contains: qParam } },
             { category: { name: { contains: qParam } } },
+            { transactionRef: { contains: qParam } },
           ],
         }
       : {}),
   };
 
   const rows = await prisma.transaction.findMany({
-    where: where as any,
+    where,
     include: {
       category: {
         select: {
@@ -170,7 +181,7 @@ export async function GET(request: Request) {
           name: true,
           type: true,
           parent: {
-            select: { name: true },
+            select: { name: true, parent: { select: { name: true } } },
           },
         },
       },
@@ -296,6 +307,9 @@ export async function GET(request: Request) {
       name: row.category.name,
       type: row.category.type,
       parentName: row.category.parent?.name ?? null,
+      pathLabel: [row.category.parent?.parent?.name, row.category.parent?.name, row.category.name]
+        .filter(Boolean)
+        .join(" / "),
     },
     teamUsers: row.teamUsers.map((link: (typeof row.teamUsers)[number]) => link.user),
     notes: parseNotes(row.notes),
@@ -337,10 +351,14 @@ export async function POST(request: Request) {
       id: payload.categoryId,
       isActive: true,
     },
-    select: { id: true, type: true },
+    select: { id: true, type: true, _count: { select: { children: true } } },
   });
   if (!category) {
     return fail("Danh mục không hợp lệ", 400);
+  }
+  // Only the deepest node of a branch can carry money, so totals never double-count a parent.
+  if (category._count.children > 0) {
+    return fail("Vui lòng chọn danh mục con ở cấp sâu nhất", 400);
   }
 
   const teamUserIds = Array.from(new Set(payload.teamUserIds ?? []));
@@ -400,6 +418,8 @@ export async function POST(request: Request) {
         exchangeRateToVnd: fx,
         amountVnd,
         description: payload.description,
+        transactionRef: payload.transactionRef ?? null,
+        workshopEmail: payload.workshopEmail ?? null,
         notes: [],
         transactionDate: payload.transactionDate
           ? new Date(payload.transactionDate)

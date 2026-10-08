@@ -7,8 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { PAYMENT_BANK_NAMES } from "@/lib/bank-options";
 
 type PaymentAccount = {
   id: string;
@@ -24,6 +26,14 @@ type PaymentAccountsResponse = {
   error?: string;
   rows?: PaymentAccount[];
 };
+
+function bankOptionsWithCurrent(currentValue: string) {
+  const trimmed = currentValue.trim();
+  if (!trimmed || PAYMENT_BANK_NAMES.includes(trimmed as (typeof PAYMENT_BANK_NAMES)[number])) {
+    return PAYMENT_BANK_NAMES;
+  }
+  return [trimmed, ...PAYMENT_BANK_NAMES];
+}
 
 export function PaymentAccountsManager() {
   const [rows, setRows] = useState<PaymentAccount[]>([]);
@@ -171,7 +181,18 @@ export function PaymentAccountsManager() {
           </div>
           <div className="space-y-2">
             <Label>Ngân hàng</Label>
-            <Input value={bankName} onChange={(event) => setBankName(event.target.value)} placeholder="Vietcombank" />
+            <Select value={bankName} onValueChange={setBankName}>
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="Chọn ngân hàng" />
+              </SelectTrigger>
+              <SelectContent>
+                {PAYMENT_BANK_NAMES.map((option) => (
+                  <SelectItem key={option} value={option}>
+                    {option}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div className="space-y-2">
             <Label>Số tài khoản</Label>
@@ -196,7 +217,7 @@ export function PaymentAccountsManager() {
           <CardTitle>Danh sách tài khoản thanh toán</CardTitle>
         </CardHeader>
         <CardContent>
-          <Table>
+          <Table className="min-w-[760px]">
             <TableHeader>
               <TableRow>
                 <TableHead>Tên tài khoản</TableHead>
@@ -220,7 +241,18 @@ export function PaymentAccountsManager() {
                   </TableCell>
                   <TableCell>
                     {editingId === row.id ? (
-                      <Input value={editBankName} onChange={(event) => setEditBankName(event.target.value)} />
+                      <Select value={editBankName} onValueChange={setEditBankName}>
+                        <SelectTrigger className="min-w-44">
+                          <SelectValue placeholder="Chọn ngân hàng" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {bankOptionsWithCurrent(editBankName).map((option) => (
+                            <SelectItem key={option} value={option}>
+                              {option}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     ) : (
                       row.bankName
                     )}

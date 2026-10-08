@@ -100,10 +100,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       id: parsed.data.categoryId,
       isActive: true,
     },
-    select: { id: true, type: true },
+    select: { id: true, type: true, _count: { select: { children: true } } },
   });
   if (!category) {
     return fail("Danh mục không hợp lệ", 400);
+  }
+  if (category._count.children > 0) {
+    return fail("Vui lòng chọn danh mục con ở cấp sâu nhất", 400);
   }
 
   const teamUserIds = Array.from(new Set(parsed.data.teamUserIds ?? []));

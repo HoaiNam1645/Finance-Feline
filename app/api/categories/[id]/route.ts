@@ -6,6 +6,8 @@ import { prisma } from "@/lib/prisma";
 
 const patchSchema = z.object({
   name: z.string().min(2).optional(),
+  note: z.string().trim().max(255).nullable().optional(),
+  contactEmail: z.string().trim().max(191).nullable().optional(),
   type: z.enum(["INCOME", "EXPENSE"]).optional(),
   parentId: z.preprocess((value) => (value === "" || value == null ? null : value), z.string().min(1).nullable().optional()),
   accountantApprovalThresholdVnd: z.number().int().positive().optional(),
@@ -28,6 +30,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   }
   if (
     typeof parsed.data.name === "undefined" &&
+    typeof parsed.data.note === "undefined" &&
+    typeof parsed.data.contactEmail === "undefined" &&
     typeof parsed.data.type === "undefined" &&
     typeof parsed.data.parentId === "undefined" &&
     typeof parsed.data.accountantApprovalThresholdVnd === "undefined"
@@ -45,20 +49,15 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   }
 
   const hasTransactions = before._count.transactions > 0;
+  // Renaming or moving a category leaves every transaction pointing at the same row, so both
+  // stay open once it has history. Flipping Thu/Chi would rewrite past reports, so that stays locked.
   if (hasTransactions) {
-    const hasNameChange = typeof parsed.data.name !== "undefined";
-    const hasTypeChange = typeof parsed.data.type !== "undefined";
-    const hasParentChange = typeof parsed.data.parentId !== "undefined";
-    const hasThresholdChange = typeof parsed.data.accountantApprovalThresholdVnd === "number";
-
-    if (hasNameChange || hasTypeChange || hasParentChange) {
-      return fail("Danh mục đã có giao dịch nên chỉ được cập nhật ngưỡng duyệt kế toán", 409);
+    const nextType = parsed.data.type;
+    if (typeof nextType !== "undefined" && nextType !== before.type) {
+      return fail("Danh mục đã có giao dịch nên không được đổi loại Thu/Chi", 409);
     }
-    if (!hasThresholdChange) {
-      return fail("Không có dữ liệu cập nhật", 400);
-    }
-    if (!auth.user.roles.includes("ADMIN")) {
-      return fail("Chỉ ADMIN được cập nhật ngưỡng duyệt cho danh mục đã có giao dịch", 403);
+    if (!auth.user.roles.includes("ADMIN") && !auth.user.roles.includes("ACCOUNTANT")) {
+      return fail("Bạn không có quyền cập nhật danh mục đã có giao dịch", 403);
     }
   }
 
@@ -92,29 +91,41 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   if (nextParentId) {
     const parent = await prisma.transactionCategory.findUnique({
       where: { id: nextParentId },
-      select: { id: true, type: true, parentId: true, isActive: true },
+      select: {
+        id: true,
+        parentId: true,
+        isActive: true,
+        parent: { select: { id: true, parentId: true } },
+      },
     });
     if (!parent || !parent.isActive) {
       return fail("Danh mục cha không hợp lệ", 400);
     }
-    const nextType = hasTransactions ? before.type : parsed.data.type ?? before.type;
-    if (parent.type !== nextType) {
-      return fail("Danh mục con phải cùng loại với danh mục cha", 400);
+    // A category cannot sit under one of its own descendants.
+    if (parent.parentId === id || parent.parent?.parentId === id) {
+      return fail("Không thể chuyển danh mục vào bên dưới chính nó", 400);
     }
-    if (parent.parentId) {
-      return fail("Chỉ hỗ trợ 1 cấp danh mục con", 400);
+    const parentLevel = parent.parent?.parentId ? 3 : parent.parentId ? 2 : 1;
+    const nextLevel = parentLevel + 1;
+    if (nextLevel > 3) {
+      return fail("Chỉ hỗ trợ tối đa 3 cấp danh mục", 400);
     }
-  }
-  if (before._count.children > 0 && nextParentId) {
-    return fail("Danh mục cha đang có danh mục con, không thể đổi thành danh mục con", 409);
+    // Moving a category drags its children along, so they must still fit inside 3 levels.
+    if (before._count.children > 0 && nextLevel > 2) {
+      return fail("Danh mục này đang có danh mục con nên chỉ được đặt ở cấp 1 hoặc cấp 2", 409);
+    }
   }
 
   const row = await prisma.transactionCategory.update({
     where: { id },
     data: {
-      name: hasTransactions ? before.name : nextName,
+      name: nextName,
+      ...(typeof parsed.data.note === "undefined" ? {} : { note: parsed.data.note?.trim() || null }),
+      ...(typeof parsed.data.contactEmail === "undefined"
+        ? {}
+        : { contactEmail: parsed.data.contactEmail?.trim() || null }),
       type: hasTransactions ? before.type : parsed.data.type ?? before.type,
-      ...(hasTransactions ? {} : { parentId: nextParentId }),
+      parentId: nextParentId,
       accountantApprovalThresholdVnd:
         typeof parsed.data.accountantApprovalThresholdVnd === "number"
           ? parsed.data.accountantApprovalThresholdVnd

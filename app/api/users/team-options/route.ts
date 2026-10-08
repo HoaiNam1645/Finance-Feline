@@ -1,6 +1,7 @@
 import { requireApiUser } from "@/lib/api-auth";
 import { forbidden, ok, unauthorized } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
+import { STAFF_ROLE_CODES } from "@/lib/roles";
 
 export async function GET() {
   const auth = await requireApiUser("transaction.read");
@@ -14,7 +15,7 @@ export async function GET() {
       status: "ACTIVE",
       roles: {
         some: {
-          role: { code: "EMPLOYEE" },
+          role: { code: { in: [...STAFF_ROLE_CODES] } },
         },
       },
       AND: [

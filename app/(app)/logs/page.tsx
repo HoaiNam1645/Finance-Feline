@@ -178,7 +178,7 @@ export default async function LogsPage({ searchParams }: Props) {
           <CardTitle>Danh sách log</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <Table>
+          <Table className="min-w-[860px]">
             <TableHeader>
               <TableRow>
                 <TableHead>Thời gian</TableHead>

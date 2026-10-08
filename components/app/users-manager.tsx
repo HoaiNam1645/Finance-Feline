@@ -11,6 +11,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { roleLabel } from "@/lib/roles";
+import Link from "next/link";
+import { Wallet } from "lucide-react";
 
 type UserRow = {
   id: string;
@@ -34,12 +37,7 @@ type UsersResponse = {
   roleOptions?: RoleOption[];
 };
 
-function mapRoleLabel(role: string) {
-  if (role === "ADMIN") return "Quản trị";
-  if (role === "ACCOUNTANT") return "Kế toán";
-  if (role === "EMPLOYEE") return "Nhân viên";
-  return role;
-}
+const mapRoleLabel = roleLabel;
 
 export function UsersManager() {
   const [rows, setRows] = useState<UserRow[]>([]);
@@ -275,7 +273,7 @@ export function UsersManager() {
           <CardTitle>Danh sách user</CardTitle>
         </CardHeader>
         <CardContent>
-          <Table>
+          <Table className="min-w-[760px]">
             <TableHeader>
               <TableRow>
                 <TableHead>Tài khoản</TableHead>
@@ -312,7 +310,15 @@ export function UsersManager() {
                   </TableCell>
                   <TableCell>{new Date(row.createdAt).toLocaleString("vi-VN")}</TableCell>
                   <TableCell className="text-right">
-                    <div className="flex justify-end gap-2">
+                    <div className="flex flex-wrap justify-end gap-2">
+                      {row.roles.includes("ACCOUNT") ? (
+                        <Button size="sm" variant="outline" asChild>
+                          <Link href={`/account-wallets?user=${row.id}`}>
+                            <Wallet className="mr-1 size-3.5" />
+                            Xem ví
+                          </Link>
+                        </Button>
+                      ) : null}
                       <Button size="sm" variant="outline" onClick={() => openEditModal(row)}>
                         Sửa
                       </Button>

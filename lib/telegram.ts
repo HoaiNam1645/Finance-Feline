@@ -1,4 +1,8 @@
 import type { SessionUser } from "@/lib/auth";
+import {
+  CurrencyConversionActionError,
+  updateCurrencyConversionStatus,
+} from "@/lib/currency-conversion-actions";
 import { env } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 import {
@@ -39,7 +43,9 @@ type TelegramUpdate = {
 };
 
 const TELEGRAM_MEDIA_GROUP_LIMIT = 10;
+const TELEGRAM_PHOTO_CAPTION_LIMIT = 1024;
 const REJECT_REASON_MAX_LENGTH = 500;
+const TELEGRAM_SEPARATOR = "------------------------------";
 
 function telegramEnabled() {
   return Boolean(env.telegramBotToken && env.telegramChatId);
@@ -66,6 +72,17 @@ function formatDate(value: Date) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function currencyConversionStatusLabel(status: string) {
+  if (status === "SUCCEEDED") return "Thành công";
+  if (status === "FAILED") return "Thất bại";
+  return "Đang chờ";
+}
+
+function truncateText(value: string, maxLength: number) {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
 }
 
 async function telegramApi(method: string, payload: Record<string, unknown>) {
@@ -114,6 +131,37 @@ async function getRequestForTelegram(id: string) {
   });
 }
 
+async function getCurrencyConversionForTelegram(id: string) {
+  return prisma.currencyConversion.findUnique({
+    where: { id },
+    include: {
+      creator: { select: { fullName: true, email: true } },
+      decider: { select: { fullName: true, email: true } },
+      walletPaymentAccount: {
+        select: {
+          accountName: true,
+          bankName: true,
+          accountNumber: true,
+          ownerName: true,
+        },
+      },
+      requests: {
+        include: {
+          purchaseRequest: {
+            select: {
+              id: true,
+              title: true,
+              expectedAmount: true,
+              currencyCode: true,
+              requester: { select: { fullName: true } },
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
 function categoryName(request: NonNullable<Awaited<ReturnType<typeof getRequestForTelegram>>>) {
   if (!request.category) return "Chưa chọn";
   if (request.category.parent?.name) {
@@ -130,22 +178,22 @@ function buildRequestMessage(request: NonNullable<Awaited<ReturnType<typeof getR
   const category = escapeHtml(categoryName(request));
   const receiptLine =
     request.receiptImages.length > 0
-      ? `\n📎 <b>Chứng từ:</b> ${request.receiptImages.length} file`
+      ? `\n<b>Chứng từ:</b> ${request.receiptImages.length} file`
       : "";
   const appLink = `${env.appUrl.replace(/\/$/, "")}/purchase-requests`;
 
   return [
-    `🔔 <b>${kindLabel} mới</b> <code>#${request.id.slice(-6).toUpperCase()}</code>`,
-    "────────────────────",
-    `👤 <b>Người tạo:</b> ${requester}`,
-    `🗂 <b>Danh mục:</b> ${category}`,
-    `💵 <b>Số tiền:</b> <code>${money(request.expectedAmount, request.currencyCode)}</code>`,
-    `✍️ <b>Tiêu đề:</b> ${title}`,
-    `📝 <b>Mô tả:</b> ${description}`,
-    `🕒 <b>Ngày tạo:</b> ${formatDate(request.createdAt)}${receiptLine}`,
-    "────────────────────",
-    `🔄 <b>Trạng thái:</b> ${request.status}`,
-    `↗️ <a href="${escapeHtml(appLink)}">Mở trong hệ thống</a>`,
+    `<b>${kindLabel} mới</b> <code>#${request.id.slice(-6).toUpperCase()}</code>`,
+    TELEGRAM_SEPARATOR,
+    `<b>Người tạo:</b> ${requester}`,
+    `<b>Danh mục:</b> ${category}`,
+    `<b>Số tiền:</b> <code>${money(request.expectedAmount, request.currencyCode)}</code>`,
+    `<b>Tiêu đề:</b> ${title}`,
+    `<b>Mô tả:</b> ${description}`,
+    `<b>Ngày tạo:</b> ${formatDate(request.createdAt)}${receiptLine}`,
+    TELEGRAM_SEPARATOR,
+    `<b>Trạng thái:</b> ${request.status}`,
+    `<a href="${escapeHtml(appLink)}">Mở trong hệ thống</a>`,
   ].join("\n");
 }
 
@@ -153,11 +201,110 @@ function buildApprovalKeyboard(requestId: string): TelegramInlineKeyboard {
   return {
     inline_keyboard: [
       [
-        { text: "🟢 Duyệt", callback_data: `pr:approve:${requestId}` },
-        { text: "🔴 Từ chối", callback_data: `pr:reject:${requestId}` },
+        { text: "Duyệt", callback_data: `pr:approve:${requestId}` },
+        { text: "Từ chối", callback_data: `pr:reject:${requestId}` },
       ],
     ],
   };
+}
+
+function buildCurrencyConversionKeyboard(conversionId: string): TelegramInlineKeyboard {
+  return {
+    inline_keyboard: [
+      [
+        { text: "Thành công", callback_data: `cc:succeeded:${conversionId}` },
+        { text: "Thất bại", callback_data: `cc:failed:${conversionId}` },
+      ],
+    ],
+  };
+}
+
+function buildCurrencyConversionMessage(
+  conversion: NonNullable<Awaited<ReturnType<typeof getCurrencyConversionForTelegram>>>,
+  options: { compactForCaption?: boolean } = {}
+) {
+  const compact = options.compactForCaption;
+  const visibleRequests = compact ? conversion.requests.slice(0, 4) : conversion.requests;
+  const requestLines = conversion.requests.length
+    ? visibleRequests
+        .map((item, index) => {
+          const request = item.purchaseRequest;
+          const title = compact ? truncateText(request.title, 42) : request.title;
+          return `${index + 1}. ${escapeHtml(title)} - <code>${money(
+            request.expectedAmount,
+            request.currencyCode
+          )}</code>`;
+        })
+        .concat(
+          compact && conversion.requests.length > visibleRequests.length
+            ? [`… và ${conversion.requests.length - visibleRequests.length} yêu cầu khác`]
+            : []
+        )
+        .join("\n")
+    : "-";
+  const deciderLine = conversion.decider
+    ? `\n<b>Người cập nhật:</b> ${escapeHtml(
+        compact ? conversion.decider.fullName : `${conversion.decider.fullName} (${conversion.decider.email})`
+      )}`
+    : "";
+  const decidedAtLine = conversion.decidedAt ? `\n<b>Cập nhật lúc:</b> ${formatDate(conversion.decidedAt)}` : "";
+  const walletAccount = conversion.walletPaymentAccount;
+  const walletLine = walletAccount
+    ? `${walletAccount.accountName} - ${walletAccount.accountNumber}`
+    : conversion.walletName;
+  const appLink = `${env.appUrl.replace(/\/$/, "")}/currency-conversions`;
+
+  const lines = [
+    `<b>Lệnh quy đổi tiền tệ</b> <code>#${conversion.id.slice(-6).toUpperCase()}</code>`,
+    TELEGRAM_SEPARATOR,
+    `<b>Ví PingPong:</b> ${escapeHtml(compact ? truncateText(walletLine, 54) : walletLine)}`,
+    `<b>Ngân hàng nhận:</b> ${escapeHtml(compact ? truncateText(conversion.bankName, 48) : conversion.bankName)}`,
+    `<b>Số tài khoản:</b> <code>${escapeHtml(
+      compact ? truncateText(conversion.accountNumber, 32) : conversion.accountNumber
+    )}</code>`,
+    `<b>Chủ tài khoản:</b> ${escapeHtml(compact ? truncateText(conversion.ownerName, 48) : conversion.ownerName)}`,
+    `<b>Số tiền quy đổi:</b> <code>${money(conversion.amountUsd, "USD")}</code>`,
+    `<b>Số tiền nhận:</b> <code>${money(conversion.amountVnd, "VND")}</code>`,
+    ...(conversion.transferTransactionId
+      ? [`<b>Mã giao dịch chuyển:</b> <code>${escapeHtml(conversion.transferTransactionId)}</code>`]
+      : []),
+    ...(conversion.receiveTransactionId
+      ? [`<b>Mã giao dịch nhận:</b> <code>${escapeHtml(conversion.receiveTransactionId)}</code>`]
+      : []),
+    ...(conversion.notes
+      ? [`<b>Notes:</b> ${escapeHtml(compact ? truncateText(conversion.notes, 120) : conversion.notes)}`]
+      : []),
+    `<b>Yêu cầu mua gắn kèm:</b>\n${requestLines}`,
+    TELEGRAM_SEPARATOR,
+    `<b>Trạng thái:</b> ${currencyConversionStatusLabel(conversion.status)}`,
+    `<b>Người tạo:</b> ${escapeHtml(
+      compact ? conversion.creator.fullName : `${conversion.creator.fullName} (${conversion.creator.email})`
+    )}`,
+    `<b>Ngày tạo:</b> ${formatDate(conversion.createdAt)}${deciderLine}${decidedAtLine}`,
+    `<a href="${escapeHtml(appLink)}">Mở trong hệ thống</a>`,
+  ];
+
+  if (!compact) {
+    return lines.join("\n");
+  }
+
+  const caption = lines.join("\n");
+  if (caption.length <= TELEGRAM_PHOTO_CAPTION_LIMIT) {
+    return caption;
+  }
+
+  return [
+    `<b>Lệnh quy đổi tiền tệ</b> <code>#${conversion.id.slice(-6).toUpperCase()}</code>`,
+    TELEGRAM_SEPARATOR,
+    `<b>Ví PingPong:</b> ${escapeHtml(truncateText(walletLine, 44))}`,
+    `<b>Ngân hàng nhận:</b> ${escapeHtml(truncateText(conversion.bankName, 40))}`,
+    `<b>Chủ tài khoản:</b> ${escapeHtml(truncateText(conversion.ownerName, 40))}`,
+    `<b>Số tiền quy đổi:</b> <code>${money(conversion.amountUsd, "USD")}</code>`,
+    `<b>Yêu cầu mua gắn kèm:</b> ${conversion.requests.length} yêu cầu`,
+    TELEGRAM_SEPARATOR,
+    `<b>Trạng thái:</b> ${currencyConversionStatusLabel(conversion.status)}`,
+    `<a href="${escapeHtml(appLink)}">Mở trong hệ thống</a>`,
+  ].join("\n");
 }
 
 function absoluteReceiptUrl(filePath: string) {
@@ -182,7 +329,7 @@ function receiptCaption(
 ) {
   const end = start + count - 1;
   const range = request.receiptImages.length === 1 ? "1/1" : `${start}-${end}/${request.receiptImages.length}`;
-  return `🧾 <b>Chứng từ</b> <code>#${escapeHtml(request.id.slice(-6).toUpperCase())}</code> (${range})`;
+  return `<b>Chứng từ</b> <code>#${escapeHtml(request.id.slice(-6).toUpperCase())}</code> (${range})`;
 }
 
 async function sendReceiptImage(
@@ -234,6 +381,18 @@ async function sendExtraReceiptImages(
   }
 }
 
+async function sendCurrencyConversionPhotoNotification(
+  conversion: NonNullable<Awaited<ReturnType<typeof getCurrencyConversionForTelegram>>>
+) {
+  return telegramApi("sendPhoto", {
+    chat_id: env.telegramChatId,
+    photo: absoluteReceiptUrl(conversion.pingpongImagePath),
+    caption: buildCurrencyConversionMessage(conversion, { compactForCaption: true }),
+    parse_mode: "HTML",
+    reply_markup: buildCurrencyConversionKeyboard(conversion.id),
+  });
+}
+
 export async function notifyPurchaseRequestSubmitted(requestId: string) {
   if (!telegramEnabled()) {
     console.log("[telegram] skipped purchase request notification: missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID");
@@ -269,6 +428,47 @@ export async function notifyPurchaseRequestSubmitted(requestId: string) {
     parse_mode: "HTML",
     disable_web_page_preview: true,
     reply_markup: buildApprovalKeyboard(request.id),
+  });
+}
+
+export async function notifyCurrencyConversionCreated(conversionId: string) {
+  if (!telegramEnabled()) {
+    console.log("[telegram] skipped currency conversion notification: missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID");
+    return;
+  }
+
+  const conversion = await getCurrencyConversionForTelegram(conversionId);
+  if (!conversion) return;
+
+  const sentPhoto = await sendCurrencyConversionPhotoNotification(conversion).catch((error) => {
+    console.error("[telegram] currency conversion photo notification failed", error);
+    return null;
+  });
+  if (sentPhoto) return;
+
+  await telegramApi("sendMessage", {
+    chat_id: env.telegramChatId,
+    text: buildCurrencyConversionMessage(conversion),
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+    reply_markup: buildCurrencyConversionKeyboard(conversion.id),
+  });
+}
+
+export async function notifyCurrencyConversionStatusChanged(conversionId: string) {
+  if (!telegramEnabled()) {
+    console.log("[telegram] skipped currency conversion status notification: missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID");
+    return;
+  }
+
+  const conversion = await getCurrencyConversionForTelegram(conversionId);
+  if (!conversion) return;
+
+  await telegramApi("sendMessage", {
+    chat_id: env.telegramChatId,
+    text: buildCurrencyConversionMessage(conversion),
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
   });
 }
 
@@ -344,6 +544,37 @@ async function updateCallbackMessage(callback: TelegramCallbackQuery, requestId:
   }
 }
 
+async function updateCurrencyConversionCallbackMessage(callback: TelegramCallbackQuery, conversionId: string) {
+  const chatId = callback.message?.chat?.id;
+  const messageId = callback.message?.message_id;
+  if (!chatId || !messageId) return false;
+
+  const conversion = await getCurrencyConversionForTelegram(conversionId);
+  if (!conversion) return false;
+
+  const hasMedia = Boolean(callback.message?.caption || callback.message?.photo?.length);
+  if (hasMedia) {
+    const captionResult = await telegramApi("editMessageCaption", {
+      chat_id: chatId,
+      message_id: messageId,
+      caption: buildCurrencyConversionMessage(conversion, { compactForCaption: true }),
+      parse_mode: "HTML",
+      reply_markup: { inline_keyboard: [] },
+    });
+    if (captionResult) return true;
+  }
+
+  const editResult = await telegramApi("editMessageText", {
+    chat_id: chatId,
+    message_id: messageId,
+    text: buildCurrencyConversionMessage(conversion),
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+    reply_markup: { inline_keyboard: [] },
+  });
+  return Boolean(editResult);
+}
+
 function rejectPromptMarker(requestId: string, messageId: number, hasMedia: boolean) {
   return `reject:${requestId}:${messageId}:${hasMedia ? "photo" : "text"}`;
 }
@@ -362,7 +593,7 @@ async function requestRejectReason(callback: TelegramCallbackQuery, requestId: s
   const chatId = callback.message?.chat?.id;
   const messageId = callback.message?.message_id;
   if (!chatId || !messageId) {
-    await sendCallbackMessage(callback, "⚠️ Không xác định được tin nhắn cần từ chối.");
+    await sendCallbackMessage(callback, "Không xác định được tin nhắn cần từ chối.");
     return;
   }
 
@@ -370,7 +601,8 @@ async function requestRejectReason(callback: TelegramCallbackQuery, requestId: s
   const promptResult = await telegramApi("sendMessage", {
     chat_id: chatId,
     text: [
-      "📝 <b>Nhập lý do từ chối</b>",
+      "<b>Nhập lý do từ chối</b>",
+      TELEGRAM_SEPARATOR,
       "Hãy reply tin nhắn này với lý do để hoàn tất từ chối yêu cầu.",
       "",
       `<code>${rejectPromptMarker(requestId, messageId, hasMedia)}</code>`,
@@ -381,7 +613,7 @@ async function requestRejectReason(callback: TelegramCallbackQuery, requestId: s
   });
 
   if (!promptResult) {
-    await sendCallbackMessage(callback, "⚠️ Không gửi được tin nhắn nhập lý do. Vui lòng thử lại.");
+    await sendCallbackMessage(callback, "Không gửi được tin nhắn nhập lý do. Vui lòng thử lại.");
   }
 }
 
@@ -395,7 +627,7 @@ async function handleRejectReasonMessage(message: TelegramMessage) {
   if (!reason) {
     await telegramApi("sendMessage", {
       chat_id: message.chat?.id,
-      text: "⚠️ Lý do từ chối không được để trống. Vui lòng reply lại bằng lý do cụ thể.",
+      text: "Lý do từ chối không được để trống. Vui lòng reply lại bằng lý do cụ thể.",
       reply_to_message_id: message.message_id,
     });
     return { handled: true, ok: false };
@@ -405,7 +637,7 @@ async function handleRejectReasonMessage(message: TelegramMessage) {
   if (!actor) {
     await telegramApi("sendMessage", {
       chat_id: message.chat?.id,
-      text: "⚠️ Chưa cấu hình người duyệt Telegram.",
+      text: "Chưa cấu hình người duyệt Telegram.",
       reply_to_message_id: message.message_id,
     });
     return { handled: true, ok: false };
@@ -423,12 +655,12 @@ async function handleRejectReasonMessage(message: TelegramMessage) {
       chatId: message.chat?.id,
       messageId: marker.messageId,
       requestId: marker.requestId,
-      statusLine: `❌ <b>Đã từ chối</b> bởi ${escapeHtml(actor.fullName)}\n📝 <b>Lý do:</b> ${escapeHtml(note)}`,
+      statusLine: `<b>Đã từ chối</b> bởi ${escapeHtml(actor.fullName)}\n<b>Lý do:</b> ${escapeHtml(note)}`,
       hasMedia: marker.hasMedia,
     });
     await telegramApi("sendMessage", {
       chat_id: message.chat?.id,
-      text: "✅ Đã ghi nhận lý do từ chối.",
+      text: "Đã ghi nhận lý do từ chối.",
       reply_to_message_id: message.message_id,
     });
     return { handled: true, ok: true };
@@ -440,13 +672,13 @@ async function handleRejectReasonMessage(message: TelegramMessage) {
         chatId: message.chat?.id,
         messageId: marker.messageId,
         requestId: marker.requestId,
-        statusLine: `ℹ️ <b>Yêu cầu đã được xử lý trước đó</b> (${escapeHtml(request.status)})`,
+        statusLine: `<b>Yêu cầu đã được xử lý trước đó</b> (${escapeHtml(request.status)})`,
         hasMedia: marker.hasMedia,
       });
     } else {
       await telegramApi("sendMessage", {
         chat_id: message.chat?.id,
-        text: `⚠️ ${escapeHtml(errorMessage)}`,
+        text: escapeHtml(errorMessage),
         parse_mode: "HTML",
         reply_to_message_id: message.message_id,
       });
@@ -500,13 +732,13 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
     return { handled: false };
   }
 
-  const match = callback.data.match(/^pr:(approve|reject):(.+)$/);
-  if (!match) {
+  const purchaseRequestMatch = callback.data.match(/^pr:(approve|reject):(.+)$/);
+  const currencyConversionMatch = callback.data.match(/^cc:(succeeded|failed):(.+)$/);
+  if (!purchaseRequestMatch && !currencyConversionMatch) {
     await answerCallbackQuery(callback.id, "Hành động không hợp lệ", true);
     return { handled: false };
   }
 
-  const [, action, requestId] = match;
   const actor = await getTelegramApprovalActor();
   if (!actor) {
     await answerCallbackQuery(callback.id, "Chưa cấu hình người duyệt Telegram", true);
@@ -516,6 +748,26 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
   try {
     await answerCallbackQuery(callback.id, "Đang xử lý...");
 
+    if (currencyConversionMatch) {
+      const [, action, conversionId] = currencyConversionMatch;
+      await updateCurrencyConversionStatus({
+        id: conversionId,
+        actor,
+        status: action === "succeeded" ? "SUCCEEDED" : "FAILED",
+        auditAction: `currency_conversion.telegram_${action}`,
+      });
+      const updated = await updateCurrencyConversionCallbackMessage(callback, conversionId);
+      if (!updated) {
+        await sendCallbackMessage(callback, action === "succeeded" ? "Đã cập nhật thành công" : "Đã cập nhật thất bại");
+      }
+      return { handled: true, ok: true };
+    }
+
+    if (!purchaseRequestMatch) {
+      await sendCallbackMessage(callback, "Hành động không hợp lệ.");
+      return { handled: false };
+    }
+    const [, action, requestId] = purchaseRequestMatch;
     if (action === "approve") {
       await approvePurchaseRequest({
         id: requestId,
@@ -523,23 +775,42 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
         note: "Đồng ý duyệt từ Telegram",
         auditAction: "purchase_request.telegram_approve",
       });
-      await updateCallbackMessage(callback, requestId, `✅ <b>Đã duyệt</b> bởi ${escapeHtml(actor.fullName)}`);
+      await updateCallbackMessage(callback, requestId, `<b>Đã duyệt</b> bởi ${escapeHtml(actor.fullName)}`);
       return { handled: true, ok: true };
     }
 
     await requestRejectReason(callback, requestId);
     return { handled: true, ok: true, pendingReason: true };
   } catch (error) {
-    const message = error instanceof PurchaseRequestActionError ? error.message : "Xử lý thất bại";
+    const message =
+      error instanceof PurchaseRequestActionError || error instanceof CurrencyConversionActionError
+        ? error.message
+        : "Xử lý thất bại";
+    if (currencyConversionMatch) {
+      const [, , conversionId] = currencyConversionMatch;
+      const conversion = await getCurrencyConversionForTelegram(conversionId);
+      if (conversion && conversion.status !== "PENDING") {
+        await updateCurrencyConversionCallbackMessage(callback, conversionId);
+      } else {
+        await sendCallbackMessage(callback, `<b>${escapeHtml(message)}</b>`);
+      }
+      return { handled: true, ok: false, error: message };
+    }
+
+    if (!purchaseRequestMatch) {
+      await sendCallbackMessage(callback, `<b>${escapeHtml(message)}</b>`);
+      return { handled: false, ok: false, error: message };
+    }
+    const [, , requestId] = purchaseRequestMatch;
     const request = await getRequestForTelegram(requestId);
     if (request && request.status !== "PENDING_APPROVAL") {
       await updateCallbackMessage(
         callback,
         requestId,
-        `ℹ️ <b>Yêu cầu đã được xử lý trước đó</b> (${escapeHtml(request.status)})`
+        `<b>Yêu cầu đã được xử lý trước đó</b> (${escapeHtml(request.status)})`
       );
     } else {
-      await sendCallbackMessage(callback, `⚠️ <b>${escapeHtml(message)}</b>`);
+      await sendCallbackMessage(callback, `<b>${escapeHtml(message)}</b>`);
     }
     return { handled: true, ok: false, error: message };
   }

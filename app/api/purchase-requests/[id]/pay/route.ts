@@ -5,6 +5,8 @@ import { fail, forbidden, ok, unauthorized } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { notificationQueue } from "@/lib/queue";
 import { mapReceiptStorageError, saveReceiptFiles } from "@/lib/receipt-storage";
+import { createWalletRefundRequest } from "@/lib/account-wallet";
+import { notifyPurchaseRequestSubmitted } from "@/lib/telegram";
 type TxClient = Omit<typeof prisma, "$connect" | "$disconnect" | "$on" | "$transaction" | "$extends">;
 
 function parseNumberInput(input: FormDataEntryValue | null) {
@@ -160,6 +162,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   let result: {
     transaction: { id: string };
     updatedRequest: typeof purchaseRequest;
+    walletRefundRequest: { id: string } | null;
   };
   try {
     result = await prisma.$transaction(async (tx: TxClient) => {
@@ -174,6 +177,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         throw new Error("REQUEST_NOT_APPROVED_OR_ALREADY_PAID");
       }
 
+      let walletRefundRequest: { id: string } | null = null;
       const transaction = await tx.transaction.create({
         data: {
           direction: isCollection ? "IN" : "OUT",
@@ -191,6 +195,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
             ...(paymentNote.trim() ? [`Ghi chú người thanh toán: ${paymentNote.trim()}`] : []),
           ].join("\n"),
           notes: paymentNote.trim() ? { paymentTransferNote: paymentNote.trim() } : undefined,
+          transactionRef: paymentNote.trim() || null,
+          workshopEmail: purchaseRequest.workshopEmail ?? null,
           transactionDate: new Date(),
           paymentMethod: "BANK_TRANSFER",
           paymentAccountId,
@@ -226,18 +232,42 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         },
       });
 
+      // A buy-back from an Account wallet raises the matching refund request as soon as
+      // the money has actually gone out, using that exact amount.
+      if (!isCollection && purchaseRequest.walletOwnerId) {
+        const buyer = await tx.user.findUnique({
+          where: { id: purchaseRequest.requesterId },
+          select: { fullName: true },
+        });
+        walletRefundRequest = await createWalletRefundRequest(tx, {
+          sourceRequestId: purchaseRequest.id,
+          walletOwnerId: purchaseRequest.walletOwnerId,
+          amountVnd: Math.round(amountVnd),
+          sourceTitle: purchaseRequest.title,
+          buyerName: buyer?.fullName ?? "nhân viên",
+        });
+      }
+
       const updatedRequest = await tx.purchaseRequest.findUnique({ where: { id } });
       if (!updatedRequest) {
         throw new Error("REQUEST_NOT_FOUND_AFTER_UPDATE");
       }
 
-      return { transaction, updatedRequest };
+      return { transaction, updatedRequest, walletRefundRequest };
     });
   } catch (error) {
     if (error instanceof Error && error.message === "REQUEST_NOT_APPROVED_OR_ALREADY_PAID") {
       return fail("Chỉ thanh toán request đã duyệt và chưa thanh toán", 409);
     }
     throw error;
+  }
+
+  if (result.walletRefundRequest) {
+    // The generated collection sits in PENDING_APPROVAL, so approvers need the same ping
+    // a manually created request would send.
+    await notifyPurchaseRequestSubmitted(result.walletRefundRequest.id).catch((error) => {
+      console.error("[telegram] wallet refund notification failed", error);
+    });
   }
 
   await notificationQueue.add("request-paid", {

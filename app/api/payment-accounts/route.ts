@@ -2,6 +2,7 @@ import { z } from "zod";
 import { requireApiUser } from "@/lib/api-auth";
 import { writeAuditLog } from "@/lib/audit";
 import { fail, forbidden, ok, unauthorized } from "@/lib/http";
+import { findStandardBankName } from "@/lib/bank-options";
 import { prisma } from "@/lib/prisma";
 
 const createSchema = z.object({
@@ -45,10 +46,10 @@ export async function POST(request: Request) {
   }
 
   const accountName = normalizeText(parsed.data.accountName);
-  const bankName = normalizeText(parsed.data.bankName);
+  const bankName = findStandardBankName(parsed.data.bankName);
   const accountNumber = normalizeText(parsed.data.accountNumber);
   const ownerName = normalizeText(parsed.data.ownerName);
-  if (accountName.length < 2 || bankName.length < 2 || accountNumber.length < 3 || ownerName.length < 2) {
+  if (accountName.length < 2 || !bankName || accountNumber.length < 3 || ownerName.length < 2) {
     return fail("Thông tin tài khoản thanh toán không hợp lệ", 400);
   }
 

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { requireApiUser } from "@/lib/api-auth";
 import { writeAuditLog } from "@/lib/audit";
 import { fail, forbidden, ok, unauthorized } from "@/lib/http";
+import { findStandardBankName, normalizeBankNameInput } from "@/lib/bank-options";
 import { prisma } from "@/lib/prisma";
 
 const patchSchema = z.object({
@@ -45,12 +46,15 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
   const accountName =
     typeof parsed.data.accountName === "string" ? normalizeText(parsed.data.accountName) : before.accountName;
-  const bankName = typeof parsed.data.bankName === "string" ? normalizeText(parsed.data.bankName) : before.bankName;
+  const incomingBankName =
+    typeof parsed.data.bankName === "string" ? normalizeBankNameInput(parsed.data.bankName) : before.bankName;
+  const bankName =
+    incomingBankName === before.bankName ? before.bankName : findStandardBankName(incomingBankName);
   const accountNumber =
     typeof parsed.data.accountNumber === "string" ? normalizeText(parsed.data.accountNumber) : before.accountNumber;
   const ownerName = typeof parsed.data.ownerName === "string" ? normalizeText(parsed.data.ownerName) : before.ownerName;
 
-  if (accountName.length < 2 || bankName.length < 2 || accountNumber.length < 3 || ownerName.length < 2) {
+  if (accountName.length < 2 || !bankName || accountNumber.length < 3 || ownerName.length < 2) {
     return fail("Thông tin tài khoản thanh toán không hợp lệ", 400);
   }
 
