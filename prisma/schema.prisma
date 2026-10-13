@@ -271,7 +271,7 @@ model PurchaseRequest {
   requesterId    String                  @map("requester_id")
   categoryId     String?                 @map("category_id")
   title          String
-  description    String
+  description    String                  @db.Text
   kind           PurchaseRequestKind     @default(PURCHASE)
   expectedAmount Decimal                 @db.Decimal(20, 4) @map("expected_amount")
   currencyCode   String                  @map("currency_code")
