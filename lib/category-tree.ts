@@ -11,7 +11,7 @@ export type CategoryTreeInput = {
   name: string;
   note?: string | null;
   rootCode?: string | null;
-  type: "INCOME" | "EXPENSE";
+  type: "INCOME" | "EXPENSE" | "BOTH";
   parentId?: string | null;
 };
 
@@ -43,7 +43,7 @@ export function buildCategoryTree<T extends CategoryTreeInput>(
       .toSorted((a, b) => a.name.localeCompare(b.name, "vi"))
       .map(build)
       .filter((node): node is CategoryTreeNode<T> => node !== null);
-    const selectable = rawChildren.length === 0 && category.type === type;
+    const selectable = rawChildren.length === 0 && (category.type === type || category.type === "BOTH");
     if (!selectable && !children.length) return null;
     return { category, children, selectable };
   };

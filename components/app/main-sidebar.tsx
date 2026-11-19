@@ -48,7 +48,17 @@ const links = [
   { href: "/currency-conversions", label: "Quy đổi tiền tệ", icon: RefreshCcw, roles: ["ADMIN", "ACCOUNTANT"] },
   { href: "/external-receivables", label: "Công nợ", icon: HandCoins, roles: ["ADMIN", "ACCOUNTANT"] },
   { href: "/transactions", label: "Sổ giao dịch", icon: CreditCard, roles: ["ADMIN", "ACCOUNTANT", ...STAFF_ROLE_CODES, DIEU_AM_ROLE_CODE] },
-  { href: "/account-wallets", label: "Ví Account", icon: Wallet, roles: ["ADMIN", "ACCOUNTANT", "ACCOUNT"] },
+  {
+    href: "/wallets",
+    label: "Ví",
+    icon: Wallet,
+    roles: ["ADMIN", "ACCOUNTANT", "ACCOUNT"],
+    children: [
+      { href: "/account-wallets", label: "Ví Account", roles: ["ADMIN", "ACCOUNTANT", "ACCOUNT"] },
+      { href: "/public-fund-wallets", label: "Ví công quỹ", roles: ["ADMIN", "ACCOUNTANT"] },
+      { href: "/accountant-wallets", label: "Ví kế toán", roles: ["ADMIN", "ACCOUNTANT"] },
+    ],
+  },
   { href: "/categories", label: "Danh mục", icon: Tags, roles: ["ADMIN", "ACCOUNTANT"] },
   { href: "/payment-accounts", label: "Tài khoản thanh toán", icon: WalletCards, roles: ["ADMIN"] },
   { href: "/users", label: "Quản lý user", icon: Users, roles: ["ADMIN"] },

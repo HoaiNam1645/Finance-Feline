@@ -233,7 +233,7 @@ export async function POST(request: Request) {
   }
 
   const expectedCategoryType = payload.kind === "COLLECTION" ? "INCOME" : "EXPENSE";
-  if (category.type !== expectedCategoryType) {
+  if (category.type !== expectedCategoryType && category.type !== "BOTH") {
     return fail(
       payload.kind === "COLLECTION" ? "Yêu cầu thu phải chọn danh mục Thu" : "Yêu cầu mua phải chọn danh mục Chi",
       400

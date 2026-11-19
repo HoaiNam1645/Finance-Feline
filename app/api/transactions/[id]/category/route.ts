@@ -42,7 +42,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     return fail("Vui lòng chọn danh mục con ở cấp sâu nhất", 400);
   }
   const expectedType = current.direction === "IN" ? "INCOME" : "EXPENSE";
-  if (category.type !== expectedType) {
+  if (category.type !== expectedType && category.type !== "BOTH") {
     return fail(current.direction === "IN" ? "Giao dịch thu phải chọn danh mục Thu" : "Giao dịch chi phải chọn danh mục Chi", 400);
   }
   if (category.id === current.categoryId) {

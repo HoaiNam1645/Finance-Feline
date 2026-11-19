@@ -58,7 +58,7 @@ type Transaction = {
     accountNumber: string;
     ownerName: string;
   } | null;
-  category: { id: string; name: string; type: "INCOME" | "EXPENSE"; parentName?: string | null };
+  category: { id: string; name: string; type: "INCOME" | "EXPENSE" | "BOTH"; parentName?: string | null };
   receiptImages?: Array<{
     id: string;
     filePath: string;
@@ -213,7 +213,7 @@ type Category = {
   note?: string | null;
   rootCode?: string | null;
   contactEmail?: string | null;
-  type: "INCOME" | "EXPENSE";
+  type: "INCOME" | "EXPENSE" | "BOTH";
   parentId?: string | null;
   parentName?: string | null;
   level?: number;
@@ -707,8 +707,8 @@ export default function TransactionsPage() {
   const appliedPageRaw = Number(searchParams.get("page") ?? "1");
   const appliedPage = Number.isFinite(appliedPageRaw) && appliedPageRaw > 0 ? Math.floor(appliedPageRaw) : 1;
   const filteredDraftCategories = useMemo(() => {
-    if (draftDirection === "IN") return categories.filter((category) => category.type === "INCOME");
-    if (draftDirection === "OUT") return categories.filter((category) => category.type === "EXPENSE");
+    if (draftDirection === "IN") return categories.filter((category) => category.type === "INCOME" || category.type === "BOTH");
+    if (draftDirection === "OUT") return categories.filter((category) => category.type === "EXPENSE" || category.type === "BOTH");
     return categories;
   }, [categories, draftDirection]);
 
@@ -1018,6 +1018,7 @@ export default function TransactionsPage() {
     try {
       const formData = new FormData();
       formData.append("categoryId", createCategoryId);
+      formData.append("direction", createDirection);
       for (const teamUserId of createTeamUserIds) {
         formData.append("teamUserIds", teamUserId);
       }

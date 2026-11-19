@@ -33,6 +33,7 @@ type CurrencyConversionRow = {
   accountNumber: string;
   ownerName: string;
   amountUsd: string;
+  actualReceivedUsd: string | null;
   amountVnd: string;
   notes: string | null;
   transferTransactionId: string | null;
@@ -151,6 +152,7 @@ export function CurrencyConversionsManager() {
       walletPaymentAccountId: editingRow.walletPaymentAccountId,
       receivePaymentAccountId: editingRow.receivePaymentAccountId,
       amountUsd: editingRow.amountUsd,
+      actualReceivedUsd: editingRow.actualReceivedUsd,
       amountVnd: editingRow.amountVnd,
       notes: editingRow.notes,
       transferTransactionId: editingRow.transferTransactionId,
@@ -262,6 +264,9 @@ export function CurrencyConversionsManager() {
                     </TableCell>
                     <TableCell className="align-top font-medium">
                       <p>{Number(row.amountUsd).toLocaleString("vi-VN")} USD</p>
+                      <p className="text-xs text-emerald-700">
+                        Thực nhận: {row.actualReceivedUsd == null ? "-" : `${Number(row.actualReceivedUsd).toLocaleString("vi-VN")} USD`}
+                      </p>
                       <p className="text-xs text-muted-foreground">
                         Nhận: {Number(row.amountVnd).toLocaleString("vi-VN")} VND
                       </p>
@@ -433,6 +438,14 @@ export function CurrencyConversionsManager() {
                       <p>
                         <span className="text-muted-foreground">Số tiền quy đổi:</span>{" "}
                         <span className="font-semibold">{Number(viewingRow.amountUsd).toLocaleString("vi-VN")} USD</span>
+                      </p>
+                      <p>
+                        <span className="text-muted-foreground">Số tiền thực nhận:</span>{" "}
+                        <span className="font-semibold text-emerald-700">
+                          {viewingRow.actualReceivedUsd == null
+                            ? "Chưa ghi nhận"
+                            : `${Number(viewingRow.actualReceivedUsd).toLocaleString("vi-VN")} USD`}
+                        </span>
                       </p>
                       <p>
                         <span className="text-muted-foreground">Số tiền nhận:</span>{" "}

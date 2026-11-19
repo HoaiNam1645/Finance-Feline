@@ -46,7 +46,9 @@ export async function POST(request: Request) {
   if (target._count.children > 0) {
     return fail("Danh mục đích phải là danh mục con ở cấp sâu nhất", 400);
   }
-  if (target.type !== source.type) {
+  const compatibleType =
+    source.type === "BOTH" ? target.type === "BOTH" : target.type === source.type || target.type === "BOTH";
+  if (!compatibleType) {
     return fail("Danh mục đích phải cùng loại Thu/Chi với danh mục nguồn", 400);
   }
 

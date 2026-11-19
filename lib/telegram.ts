@@ -264,6 +264,9 @@ function buildCurrencyConversionMessage(
     )}</code>`,
     `<b>Chủ tài khoản:</b> ${escapeHtml(compact ? truncateText(conversion.ownerName, 48) : conversion.ownerName)}`,
     `<b>Số tiền quy đổi:</b> <code>${money(conversion.amountUsd, "USD")}</code>`,
+    `<b>Số tiền thực nhận:</b> <code>${
+      conversion.actualReceivedUsd == null ? "Chưa ghi nhận" : money(conversion.actualReceivedUsd, "USD")
+    }</code>`,
     `<b>Số tiền nhận:</b> <code>${money(conversion.amountVnd, "VND")}</code>`,
     ...(conversion.transferTransactionId
       ? [`<b>Mã giao dịch chuyển:</b> <code>${escapeHtml(conversion.transferTransactionId)}</code>`]
@@ -300,6 +303,9 @@ function buildCurrencyConversionMessage(
     `<b>Ngân hàng nhận:</b> ${escapeHtml(truncateText(conversion.bankName, 40))}`,
     `<b>Chủ tài khoản:</b> ${escapeHtml(truncateText(conversion.ownerName, 40))}`,
     `<b>Số tiền quy đổi:</b> <code>${money(conversion.amountUsd, "USD")}</code>`,
+    `<b>Thực nhận:</b> <code>${
+      conversion.actualReceivedUsd == null ? "Chưa ghi nhận" : money(conversion.actualReceivedUsd, "USD")
+    }</code>`,
     `<b>Yêu cầu mua gắn kèm:</b> ${conversion.requests.length} yêu cầu`,
     TELEGRAM_SEPARATOR,
     `<b>Trạng thái:</b> ${currencyConversionStatusLabel(conversion.status)}`,
@@ -488,6 +494,18 @@ async function sendCallbackMessage(callback: TelegramCallbackQuery, text: string
     chat_id: chatId,
     text,
     parse_mode: "HTML",
+  });
+}
+
+async function clearCallbackKeyboard(callback: TelegramCallbackQuery) {
+  const chatId = callback.message?.chat?.id;
+  const messageId = callback.message?.message_id;
+  if (!chatId || !messageId) return;
+
+  await telegramApi("editMessageReplyMarkup", {
+    chat_id: chatId,
+    message_id: messageId,
+    reply_markup: { inline_keyboard: [] },
   });
 }
 
@@ -739,6 +757,15 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
     return { handled: false };
   }
 
+  if (purchaseRequestMatch) {
+    const request = await getRequestForTelegram(purchaseRequestMatch[2]);
+    if (!request) {
+      await answerCallbackQuery(callback.id, "Yêu cầu đã bị xoá hoặc không tồn tại", true);
+      await clearCallbackKeyboard(callback);
+      return { handled: true, ok: false, error: "Request không tồn tại" };
+    }
+  }
+
   const actor = await getTelegramApprovalActor();
   if (!actor) {
     await answerCallbackQuery(callback.id, "Chưa cấu hình người duyệt Telegram", true);
@@ -803,7 +830,11 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
     }
     const [, , requestId] = purchaseRequestMatch;
     const request = await getRequestForTelegram(requestId);
-    if (request && request.status !== "PENDING_APPROVAL") {
+    if (!request) {
+      await clearCallbackKeyboard(callback);
+      return { handled: true, ok: false, error: message };
+    }
+    if (request.status !== "PENDING_APPROVAL") {
       await updateCallbackMessage(
         callback,
         requestId,

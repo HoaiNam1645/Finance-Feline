@@ -9,6 +9,7 @@ const updateSchema = z.object({
   walletPaymentAccountId: z.string().trim().min(1),
   receivePaymentAccountId: z.string().trim().min(1),
   amountUsd: z.number().positive(),
+  actualReceivedUsd: z.number().positive().optional(),
   amountVnd: z.number().positive(),
   notes: z.string().trim().max(1000).optional(),
   transferTransactionId: z.string().trim().max(191).optional(),
@@ -29,6 +30,11 @@ function parseOptionalText(value: FormDataEntryValue | null) {
 function parseNumberInput(value: FormDataEntryValue | null) {
   const numberValue = Number(String(value ?? ""));
   return Number.isFinite(numberValue) ? numberValue : NaN;
+}
+
+function parseOptionalNumberInput(value: FormDataEntryValue | null) {
+  const raw = String(value ?? "").trim();
+  return raw ? parseNumberInput(value) : undefined;
 }
 
 function parseDateInput(value: FormDataEntryValue | null) {
@@ -80,6 +86,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     walletPaymentAccountId: formData.get("walletPaymentAccountId"),
     receivePaymentAccountId: formData.get("receivePaymentAccountId"),
     amountUsd: parseNumberInput(formData.get("amountUsd")),
+    actualReceivedUsd: parseOptionalNumberInput(formData.get("actualReceivedUsd")),
     amountVnd: parseNumberInput(formData.get("amountVnd")),
     notes: parseOptionalText(formData.get("notes")),
     transferTransactionId: parseOptionalText(formData.get("transferTransactionId")),
@@ -89,6 +96,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   });
   if (!parsed.success) {
     return fail("Thông tin quy đổi không hợp lệ", 400);
+  }
+  if (parsed.data.actualReceivedUsd != null && parsed.data.actualReceivedUsd > parsed.data.amountUsd) {
+    return fail("Số tiền thực nhận không được lớn hơn số tiền quy đổi", 400);
   }
 
   const walletAccount = await prisma.paymentAccount.findFirst({
@@ -174,6 +184,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
         accountNumber: receiveAccount.accountNumber,
         ownerName: receiveAccount.ownerName,
         amountUsd: parsed.data.amountUsd,
+        actualReceivedUsd: parsed.data.actualReceivedUsd ?? null,
         amountVnd: parsed.data.amountVnd,
         notes: parsed.data.notes ?? null,
         transferTransactionId: parsed.data.transferTransactionId ?? null,

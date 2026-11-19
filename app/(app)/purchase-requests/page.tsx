@@ -86,7 +86,7 @@ type Category = {
   name: string;
   note?: string | null;
   contactEmail?: string | null;
-  type: "INCOME" | "EXPENSE";
+  type: "INCOME" | "EXPENSE" | "BOTH";
   parentId?: string | null;
   parentName?: string | null;
   level?: number;
@@ -1158,7 +1158,7 @@ export default function PurchaseRequestsPage() {
                     <SelectItem value="__ALL__">Tất cả danh mục</SelectItem>
                     {categories.map((category) => (
                       <SelectItem key={category.id} value={category.id}>
-                        [{category.type === "EXPENSE" ? "Chi" : "Thu"}] {categoryDisplayName(category)}
+                        [{category.type === "BOTH" ? "Thu & Chi" : category.type === "EXPENSE" ? "Chi" : "Thu"}] {categoryDisplayName(category)}
                       </SelectItem>
                     ))}
                   </SelectContent>

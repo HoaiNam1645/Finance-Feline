@@ -102,7 +102,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           })
         : null) ??
       (await prisma.transactionCategory.findFirst({
-        where: { isActive: true, type: categoryType },
+        where: { isActive: true, type: { in: [categoryType, "BOTH"] } },
         orderBy: { createdAt: "asc" },
       }));
   }
@@ -119,7 +119,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       where: {
         id: paymentCategoryId,
         isActive: true,
-        type: categoryType,
+        type: { in: [categoryType, "BOTH"] },
       },
     });
     if (!selectedCategory) {

@@ -136,7 +136,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     }
   }
 
-  const direction = category.type === "INCOME" ? "IN" : "OUT";
+  const direction = category.type === "BOTH" ? current.direction : category.type === "INCOME" ? "IN" : "OUT";
   const exchangeRateToVnd = parsed.data.currencyCode === "USD" ? env.defaultUsdToVnd : 1;
   const amountVnd = parsed.data.amountOriginal * exchangeRateToVnd;
   const beforePayload = {

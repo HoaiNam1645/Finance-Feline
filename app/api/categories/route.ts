@@ -10,7 +10,7 @@ const schema = z.object({
   name: z.string().min(2),
   note: z.string().trim().max(255).optional(),
   contactEmail: z.string().trim().max(191).optional(),
-  type: z.enum(["INCOME", "EXPENSE"]),
+  type: z.enum(["INCOME", "EXPENSE", "BOTH"]),
   parentId: z.preprocess((value) => (value === "" || value == null ? undefined : value), z.string().min(1).optional()),
 });
 

@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 type Category = {
   id: string;
   name: string;
-  type: "INCOME" | "EXPENSE";
+  type: "INCOME" | "EXPENSE" | "BOTH";
   parentId: string | null;
   level: number;
   pathLabel: string;
@@ -64,7 +64,15 @@ export function CategoryReassign() {
   const targetOptions = useMemo(
     () =>
       rows
-        .filter((row) => row.id !== fromId && row.childCount === 0 && (!source || row.type === source.type))
+        .filter(
+          (row) =>
+            row.id !== fromId &&
+            row.childCount === 0 &&
+            (!source ||
+              (source.type === "BOTH"
+                ? row.type === "BOTH"
+                : row.type === source.type || row.type === "BOTH"))
+        )
         .toSorted((a, b) => a.pathLabel.localeCompare(b.pathLabel, "vi")),
     [rows, fromId, source]
   );
@@ -138,7 +146,7 @@ export function CategoryReassign() {
             </Select>
             {source ? (
               <p className="text-xs text-muted-foreground">
-                {source.type === "EXPENSE" ? "Chi" : "Thu"} · {source.transactionCount} giao dịch
+                {source.type === "BOTH" ? "Thu & Chi" : source.type === "EXPENSE" ? "Chi" : "Thu"} · {source.transactionCount} giao dịch
               </p>
             ) : null}
           </div>
@@ -163,7 +171,7 @@ export function CategoryReassign() {
             </Select>
             {source && !targetOptions.length ? (
               <p className="text-xs text-muted-foreground">
-                Chưa có danh mục đích hợp lệ: cần một danh mục loại {source.type === "EXPENSE" ? "Chi" : "Thu"} không có
+                Chưa có danh mục đích hợp lệ: cần một danh mục loại {source.type === "BOTH" ? "Thu & Chi" : source.type === "EXPENSE" ? "Chi" : "Thu"} không có
                 mục con.
               </p>
             ) : null}

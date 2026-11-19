@@ -15,6 +15,7 @@ enum UserStatus {
 enum TransactionType {
   INCOME
   EXPENSE
+  BOTH
 }
 
 enum TransactionDirection {
@@ -314,6 +315,7 @@ model CurrencyConversion {
   accountNumber         String                      @map("account_number")
   ownerName             String                      @map("owner_name")
   amountUsd             Decimal                     @db.Decimal(20, 4) @map("amount_usd")
+  actualReceivedUsd     Decimal?                    @db.Decimal(20, 4) @map("actual_received_usd")
   amountVnd             Decimal                     @db.Decimal(20, 4) @map("amount_vnd")
   notes                 String?                     @db.Text
   transferTransactionId String?                     @map("transfer_transaction_id") @db.VarChar(191)

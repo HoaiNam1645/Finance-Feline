@@ -8,7 +8,7 @@ const patchSchema = z.object({
   name: z.string().min(2).optional(),
   note: z.string().trim().max(255).nullable().optional(),
   contactEmail: z.string().trim().max(191).nullable().optional(),
-  type: z.enum(["INCOME", "EXPENSE"]).optional(),
+  type: z.enum(["INCOME", "EXPENSE", "BOTH"]).optional(),
   parentId: z.preprocess((value) => (value === "" || value == null ? null : value), z.string().min(1).nullable().optional()),
   accountantApprovalThresholdVnd: z.number().int().positive().optional(),
 });
@@ -49,12 +49,12 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   }
 
   const hasTransactions = before._count.transactions > 0;
-  // Renaming or moving a category leaves every transaction pointing at the same row, so both
-  // stay open once it has history. Flipping Thu/Chi would rewrite past reports, so that stays locked.
+  // Renaming or moving a category leaves every transaction pointing at the same row. Type stays
+  // locked once history exists so the available directions cannot silently change.
   if (hasTransactions) {
     const nextType = parsed.data.type;
-    if (typeof nextType !== "undefined" && nextType !== before.type) {
-      return fail("Danh mục đã có giao dịch nên không được đổi loại Thu/Chi", 409);
+    if (typeof nextType !== "undefined" && nextType !== before.type && nextType !== "BOTH") {
+      return fail("Danh mục đã có giao dịch chỉ được mở rộng thành Thu & Chi", 409);
     }
     if (!auth.user.roles.includes("ADMIN") && !auth.user.roles.includes("ACCOUNTANT")) {
       return fail("Bạn không có quyền cập nhật danh mục đã có giao dịch", 403);
@@ -124,7 +124,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       ...(typeof parsed.data.contactEmail === "undefined"
         ? {}
         : { contactEmail: parsed.data.contactEmail?.trim() || null }),
-      type: hasTransactions ? before.type : parsed.data.type ?? before.type,
+      type: parsed.data.type ?? before.type,
       parentId: nextParentId,
       accountantApprovalThresholdVnd:
         typeof parsed.data.accountantApprovalThresholdVnd === "number"

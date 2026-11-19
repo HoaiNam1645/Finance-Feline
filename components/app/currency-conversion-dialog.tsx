@@ -24,6 +24,7 @@ export type CurrencyConversionEditingRow = {
   walletPaymentAccountId: string | null;
   receivePaymentAccountId: string | null;
   amountUsd: string;
+  actualReceivedUsd: string | null;
   amountVnd: string;
   notes: string | null;
   transferTransactionId: string | null;
@@ -100,6 +101,7 @@ export function CurrencyConversionDialog({
   const [transferTransactionId, setTransferTransactionId] = useState("");
   const [receiveTransactionId, setReceiveTransactionId] = useState("");
   const [amountUsdInput, setAmountUsdInput] = useState("");
+  const [actualReceivedUsdInput, setActualReceivedUsdInput] = useState("");
   const [selectedRequestIds, setSelectedRequestIds] = useState<string[]>([]);
   const [requestSearch, setRequestSearch] = useState("");
   const [pingpongFiles, setPingpongFiles] = useState<File[]>([]);
@@ -157,6 +159,9 @@ export function CurrencyConversionDialog({
     setWalletAccountId(conversion.walletPaymentAccountId ?? "");
     setReceiveAccountId(conversion.receivePaymentAccountId ?? "");
     setAmountUsdInput(String(Number(conversion.amountUsd)));
+    setActualReceivedUsdInput(
+      conversion.actualReceivedUsd == null ? "" : String(Number(conversion.actualReceivedUsd))
+    );
     setAmountVndInput(String(Number(conversion.amountVnd)));
     setNotes(conversion.notes ?? "");
     setTransferTransactionId(conversion.transferTransactionId ?? "");
@@ -186,6 +191,7 @@ export function CurrencyConversionDialog({
     setTransferTransactionId("");
     setReceiveTransactionId("");
     setAmountUsdInput("");
+    setActualReceivedUsdInput("");
     setSelectedRequestIds([]);
     setRequestSearch("");
     setPingpongFiles([]);
@@ -205,6 +211,7 @@ export function CurrencyConversionDialog({
 
   async function submitCurrencyConversion() {
     const amountUsd = Number(amountUsdInput);
+    const actualReceivedUsd = Number(actualReceivedUsdInput);
     const amountVnd = Number(amountVndInput);
     if (!walletAccountId) {
       toast.error("Vui lòng chọn ví PingPong");
@@ -216,6 +223,14 @@ export function CurrencyConversionDialog({
     }
     if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
       toast.error("Số tiền quy đổi USD phải lớn hơn 0");
+      return;
+    }
+    if (actualReceivedUsdInput.trim() && (!Number.isFinite(actualReceivedUsd) || actualReceivedUsd <= 0)) {
+      toast.error("Số tiền thực nhận USD phải lớn hơn 0");
+      return;
+    }
+    if (actualReceivedUsdInput.trim() && actualReceivedUsd > amountUsd) {
+      toast.error("Số tiền thực nhận không được lớn hơn số tiền quy đổi");
       return;
     }
     if (!Number.isFinite(amountVnd) || amountVnd <= 0) {
@@ -236,6 +251,7 @@ export function CurrencyConversionDialog({
     formData.set("walletPaymentAccountId", walletAccountId);
     formData.set("receivePaymentAccountId", receiveAccountId);
     formData.set("amountUsd", String(amountUsd));
+    formData.set("actualReceivedUsd", actualReceivedUsdInput.trim() ? String(actualReceivedUsd) : "");
     formData.set("amountVnd", String(amountVnd));
     formData.set("notes", notes.trim());
     formData.set("transferTransactionId", transferTransactionId.trim());
@@ -325,6 +341,19 @@ export function CurrencyConversionDialog({
                 onChange={(event) => setAmountUsdInput(event.target.value)}
                 placeholder="Nhập số USD cần quy đổi"
               />
+            </div>
+            <div className="space-y-2">
+              <Label>Số tiền thực nhận (USD) - không bắt buộc</Label>
+              <Input
+                type="number"
+                min={0}
+                max={amountUsdInput || undefined}
+                step="0.01"
+                value={actualReceivedUsdInput}
+                onChange={(event) => setActualReceivedUsdInput(event.target.value)}
+                placeholder="Nhập số USD kế toán thực nhận"
+              />
+              <p className="text-xs text-muted-foreground">Có thể để trống và nạp vào ví sau khi tiền thực tế về.</p>
             </div>
             <div className="space-y-2">
               <Label>Ngân hàng nhận</Label>

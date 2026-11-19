@@ -54,6 +54,7 @@ const schema = z.object({
   teamUserIds: z.array(z.string().min(1)).optional(),
   paymentAccountId: z.preprocess((value) => (value === "" || value == null ? undefined : value), z.string().min(1).optional()),
   categoryId: z.string().min(1),
+  direction: z.enum(["IN", "OUT"]).optional(),
   amountOriginal: z.number().positive(),
   currencyCode: z.enum(["VND", "USD"]),
   description: z.string().min(3),
@@ -91,6 +92,7 @@ async function parseCreateInput(request: Request): Promise<{ payload: CreatePayl
       teamUserIds,
       paymentAccountId: formData.get("paymentAccountId"),
       categoryId: String(formData.get("categoryId") ?? ""),
+      direction: formData.get("direction") ? String(formData.get("direction")) : undefined,
       amountOriginal: parseNumberInput(formData.get("amountOriginal")),
       currencyCode: String(formData.get("currencyCode") ?? ""),
       description: String(formData.get("description") ?? ""),
@@ -388,7 +390,10 @@ export async function POST(request: Request) {
     }
   }
 
-  const direction = category.type === "INCOME" ? "IN" : "OUT";
+  const direction = category.type === "BOTH" ? payload.direction : category.type === "INCOME" ? "IN" : "OUT";
+  if (!direction) {
+    return fail("Vui lòng chọn loại giao dịch Thu hoặc Chi", 400);
+  }
 
   let savedFiles: Array<{ filePath: string; fileName: string; mimeType: string; size: number }> = [];
   try {

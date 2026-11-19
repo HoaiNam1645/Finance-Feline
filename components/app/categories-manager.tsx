@@ -24,7 +24,7 @@ type Category = {
   name: string;
   note: string | null;
   contactEmail: string | null;
-  type: "INCOME" | "EXPENSE";
+  type: "INCOME" | "EXPENSE" | "BOTH";
   parentId: string | null;
   parentName: string | null;
   level: number;
@@ -74,7 +74,7 @@ export function CategoriesManager() {
   const [formName, setFormName] = useState("");
   const [formNote, setFormNote] = useState("");
   const [formContactEmail, setFormContactEmail] = useState("");
-  const [formType, setFormType] = useState<"INCOME" | "EXPENSE">("EXPENSE");
+  const [formType, setFormType] = useState<"INCOME" | "EXPENSE" | "BOTH">("EXPENSE");
   const [formParentId, setFormParentId] = useState<string>(NO_PARENT);
   const [formThreshold, setFormThreshold] = useState("");
 
@@ -219,7 +219,7 @@ export function CategoriesManager() {
             name: normalizedName,
             note: formNote.trim() || null,
             contactEmail: formContactEmail.trim() || null,
-            ...(category.transactionCount > 0 ? {} : { type: formType }),
+            type: formType,
             parentId: formParentId === NO_PARENT ? null : formParentId,
             accountantApprovalThresholdVnd: Math.floor(threshold),
           }),
@@ -290,7 +290,7 @@ export function CategoriesManager() {
               <span className={depth === 0 ? "font-semibold" : "font-medium"}>{category.name}</span>
               <CategoryNoteHint note={category.note} />
               <Badge variant="outline" className="font-normal">
-                {category.type === "EXPENSE" ? "Chi" : "Thu"}
+                {category.type === "BOTH" ? "Thu & Chi" : category.type === "EXPENSE" ? "Chi" : "Thu"}
               </Badge>
               {hasChildren ? (
                 <Badge variant="secondary" className="font-normal">
@@ -438,20 +438,30 @@ export function CategoriesManager() {
               <Label>Loại</Label>
               <Select
                 value={formType}
-                onValueChange={(value) => setFormType(value as "INCOME" | "EXPENSE")}
-                disabled={Boolean(editingCategory && editingCategory.transactionCount > 0)}
+                onValueChange={(value) => setFormType(value as "INCOME" | "EXPENSE" | "BOTH")}
               >
                 <SelectTrigger className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="EXPENSE">Chi</SelectItem>
-                  <SelectItem value="INCOME">Thu</SelectItem>
+                  <SelectItem
+                    value="EXPENSE"
+                    disabled={Boolean(editingCategory && editingCategory.transactionCount > 0 && editingCategory.type !== "EXPENSE")}
+                  >
+                    Chi
+                  </SelectItem>
+                  <SelectItem
+                    value="INCOME"
+                    disabled={Boolean(editingCategory && editingCategory.transactionCount > 0 && editingCategory.type !== "INCOME")}
+                  >
+                    Thu
+                  </SelectItem>
+                  <SelectItem value="BOTH">Thu & Chi</SelectItem>
                 </SelectContent>
               </Select>
               {editingCategory && editingCategory.transactionCount > 0 ? (
                 <p className="text-xs text-muted-foreground">
-                  Danh mục đã có {editingCategory.transactionCount} giao dịch nên không đổi được loại.
+                  Danh mục đã có {editingCategory.transactionCount} giao dịch: chỉ được giữ nguyên hoặc mở rộng thành Thu & Chi.
                 </p>
               ) : (
                 <p className="text-xs text-muted-foreground">
