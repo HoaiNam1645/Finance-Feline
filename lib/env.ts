@@ -16,4 +16,5 @@ export const env = {
   telegramChatId: process.env.TELEGRAM_CHAT_ID,
   telegramWebhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET,
   telegramApproverEmail: process.env.TELEGRAM_APPROVER_EMAIL,
+  felineAiReadSecret: process.env.FELINE_AI_READ_SECRET,
 };
