@@ -31,6 +31,12 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // This route performs its own constant-time shared-secret check and is the
+  // only accounting API exposed to Feline AI without a browser session.
+  if (pathname === "/api/feline-ai/data") {
+    return NextResponse.next();
+  }
+
   if (pathname.startsWith("/api") && !pathname.startsWith("/api/auth") && !hasSession) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
